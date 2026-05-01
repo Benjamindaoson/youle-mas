@@ -8,16 +8,18 @@ import json
 import os
 
 import aiofiles
+from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
-from app.schemas.state import GroupState
-from app.config import settings
-from app.adapters.tools.subtitle_maker import script_to_srt
-from app.adapters.tools.ffmpeg_composer import compose_news_video
-from app.adapters.tools.thumbnail_maker import create_thumbnail
 from app.adapters.storage.artifact_store import ArtifactStore
-from app.utils import make_artifact
+from app.adapters.tools.ffmpeg_composer import compose_news_video
+from app.adapters.tools.subtitle_maker import script_to_srt
+from app.adapters.tools.thumbnail_maker import create_thumbnail
+from app.config import settings
+from app.graph.streaming import emit
 from app.logging_config import logger
+from app.schemas.state import GroupState
+from app.utils import make_artifact
 
 
 async def video_node(state: GroupState) -> Command:
@@ -26,6 +28,8 @@ async def video_node(state: GroupState) -> Command:
     video_dir = os.path.join(settings.ARTIFACT_DIR, group_id, "video")
     os.makedirs(video_dir, exist_ok=True)
     store = ArtifactStore(settings.ARTIFACT_DIR)
+
+    emit("agent_start", agent_id="video_agent", agent_name="剪", phase="execute")
 
     script = state.get("script", {})
     image_paths = state.get("image_paths", [])
@@ -95,21 +99,32 @@ async def video_node(state: GroupState) -> Command:
         artifacts.append(thumb_art)
 
         logger.info("video_agent", action="done", has_mp4=video_path.endswith(".mp4"))
+        emit("progress", agent_id="video_agent", stage="composed",
+             detail=f"输出 {os.path.basename(video_path)}")
+        emit("agent_done", agent_id="video_agent")
         return Command(
             update={
                 "video_path": video_path, "subtitle_path": subtitle_path,
                 "thumbnail_path": thumb_path, "artifacts": artifacts,
                 "agent_status": {"video_agent": "done"},
+                "messages": [AIMessage(
+                    content=f"视频已合成：{os.path.basename(video_path)}",
+                    name="video_agent")],
             },
             goto="orchestrator",
         )
     except Exception as e:
         logger.error("video_agent_failed", error=str(e))
+        emit("error", agent_id="video_agent", message=str(e))
+        emit("agent_done", agent_id="video_agent")
         return Command(
             update={
                 "video_path": "error",
                 "errors": [{"agent": "video_agent", "error": str(e)}],
                 "agent_status": {"video_agent": "error"},
+                "messages": [AIMessage(
+                    content=f"video_agent 失败：{e}",
+                    name="video_agent")],
             },
             goto="orchestrator",
         )

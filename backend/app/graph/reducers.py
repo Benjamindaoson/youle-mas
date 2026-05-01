@@ -11,7 +11,7 @@ def append_list(left: list | None, right: list | None) -> list:
 
 
 def merge_dict(left: dict | None, right: dict | None) -> dict:
-    """字典浅合并（用于 agent_status / retry_count）。"""
+    """字典浅合并（用于 agent_status）。"""
     merged = dict(left or {})
     merged.update(right or {})
     return merged

@@ -8,18 +8,20 @@ from __future__ import annotations
 
 import os
 
+from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
-from app.schemas.state import GroupState
-from app.config import settings
 from app.adapters.model_gateway import ModelGateway
-from app.adapters.tools.tts_client import tts_minimax
+from app.adapters.storage.artifact_store import ArtifactStore
+from app.adapters.tools.audio_normalizer import normalize_audio
 from app.adapters.tools.local_bgm import select_bgm
 from app.adapters.tools.silent_audio import create_silent
-from app.adapters.tools.audio_normalizer import normalize_audio
-from app.adapters.storage.artifact_store import ArtifactStore
-from app.utils import make_artifact
+from app.adapters.tools.tts_client import tts_minimax
+from app.config import settings
+from app.graph.streaming import emit
 from app.logging_config import logger
+from app.schemas.state import GroupState
+from app.utils import make_artifact
 
 
 async def audio_node(state: GroupState) -> Command:
@@ -28,6 +30,8 @@ async def audio_node(state: GroupState) -> Command:
     audio_dir = os.path.join(settings.ARTIFACT_DIR, group_id, "audio")
     os.makedirs(audio_dir, exist_ok=True)
     store = ArtifactStore(settings.ARTIFACT_DIR)
+
+    emit("agent_start", agent_id="audio_agent", agent_name="声", phase="execute")
 
     script = state.get("script", {})
     duration = script.get("estimated_duration_seconds", 60)
@@ -68,24 +72,33 @@ async def audio_node(state: GroupState) -> Command:
             await store.save_file(bgm_art, bgm_path)
 
             logger.info("audio_agent", action="done")
+            emit("agent_done", agent_id="audio_agent")
             return Command(
                 update={
                     "voice_path": voice_path, "bgm_path": bgm_path,
                     "artifacts": [voice_art, bgm_art],
                     "agent_status": {"audio_agent": "done"},
+                    "messages": [AIMessage(
+                        content=f"配音 & BGM 就绪（{duration}s）",
+                        name="audio_agent")],
                 },
                 goto="orchestrator",
             )
         except Exception as e:
             logger.error("audio_agent_failed", error=str(e))
+            emit("error", agent_id="audio_agent", message=str(e))
             # 兜底：两条静音音轨，保证链路不崩
             fallback_voice = await create_silent(duration, audio_dir)
             fallback_bgm = await create_silent(duration, audio_dir)
+            emit("agent_done", agent_id="audio_agent")
             return Command(
                 update={
                     "voice_path": fallback_voice, "bgm_path": fallback_bgm,
                     "errors": [{"agent": "audio_agent", "error": str(e)}],
                     "agent_status": {"audio_agent": "error"},
+                    "messages": [AIMessage(
+                        content=f"audio_agent 走 fallback：{e}",
+                        name="audio_agent")],
                 },
                 goto="orchestrator",
             )

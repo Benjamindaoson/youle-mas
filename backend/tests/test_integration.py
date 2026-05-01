@@ -24,6 +24,7 @@ def _make_state(group_id="integ_test", **overrides):
         "phase": "planning",
         "current_step_index": 0,
         "approved": True,
+        "require_approval": False,
         "image_paths": [],
         "messages": [],
         "artifacts": [],
@@ -31,7 +32,6 @@ def _make_state(group_id="integ_test", **overrides):
         "agent_status": {},
         "cost_usd": 0.0,
         "errors": [],
-        "retry_count": {},
     }
     state.update(overrides)
     return state
