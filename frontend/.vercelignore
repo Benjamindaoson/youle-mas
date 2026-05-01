@@ -1,0 +1,10 @@
+# Python agent backend — Vercel 不需要
+server/
+
+# 文档与调试产物
+agent-specs.md
+tsconfig.tsbuildinfo
+
+# 其他
+.next/
+node_modules/
