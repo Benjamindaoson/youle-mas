@@ -66,78 +66,46 @@ async def orchestrator_node(state: GroupState) -> Command:
     group_id = state.get("group_id", "unknown")
     goal = state.get("user_goal", "")
 
-    # === 第一次进入：生成 dispatch_plan ===
+    # === 第一次进入：生成 dispatch_plan 并先落盘 ===
     if state.get("dispatch_plan") is None:
         plan, art = _make_plan(goal, group_id)
         plan_dict = plan.model_dump()
 
-        # 推送 dispatch 事件（前端进度条 / 计划卡片）
+        # 推送 dispatch 事件（前端可立即渲染计划卡片）
         emit("dispatch",
              plan=plan_dict.get("goal", ""),
              steps=[{"to": s["agent"], "task": s["task"]} for s in plan_dict["steps"]])
 
-        # 是否需要人工审批？
-        # 兼容点：旧测试 / 旧调用方传入 approved=True 时跳过 interrupt 直跑。
         require_approval = state.get("require_approval", False)
         already_approved = state.get("approved", False)
 
+        # 决定第一次的去向（plan/art 在这次 update 一定会落盘）
         if require_approval and not already_approved:
-            # —— HITL：挂起 graph，等待 resume(Command(resume={...})) ——
-            decision = interrupt({
-                "kind": "approval_required",
-                "plan": plan_dict,
-                "group_id": group_id,
-            })
-            # decision 是 resume 时传入的 dict
-            approved = bool(decision.get("approved", False)) if isinstance(decision, dict) else bool(decision)
-            if not approved:
-                emit("rejected", reason=(decision or {}).get("reason", "user_rejected"))
-                return Command(
-                    update={
-                        "dispatch_plan": plan,
-                        "phase": "rejected",
-                        "artifacts": [art],
-                        "agent_status": {"orchestrator": "rejected"},
-                    },
-                    goto=END,
-                )
-            # 通过审批，进入 executing
+            # 走审批门：approval_gate 节点会 interrupt 等待 resume
+            next_goto: str = APPROVAL_GATE
+            phase = "waiting_approval"
+            status = "planned"
+        elif already_approved:
+            # 直接进入执行
             _handoff("text_agent", "读取 Excel 新闻 + 生成 60 秒脚本", 1)
-            return Command(
-                update={
-                    "dispatch_plan": plan,
-                    "approved": True,
-                    "phase": "executing",
-                    "current_step_index": 0,
-                    "artifacts": [art],
-                    "agent_status": {"orchestrator": "dispatching"},
-                },
-                goto="text_agent",
-            )
+            next_goto = "text_agent"
+            phase = "executing"
+            status = "dispatching"
+        else:
+            # 既不要求审批也未 approved（向后兼容 test_unapproved_stops）
+            next_goto = END
+            phase = "waiting_approval"
+            status = "planned"
 
-        # —— 无需审批 / 已审批：直接派活 ——
-        if already_approved:
-            _handoff("text_agent", "读取 Excel 新闻 + 生成 60 秒脚本", 1)
-            return Command(
-                update={
-                    "dispatch_plan": plan,
-                    "phase": "executing",
-                    "current_step_index": 0,
-                    "artifacts": [art],
-                    "agent_status": {"orchestrator": "dispatching"},
-                },
-                goto="text_agent",
-            )
-
-        # 既不要求审批，也未 approved（兼容旧测试 test_unapproved_stops 语义）
         return Command(
             update={
                 "dispatch_plan": plan,
-                "phase": "waiting_approval",
+                "phase": phase,
+                "current_step_index": 0,
                 "artifacts": [art],
-                "agent_status": {"orchestrator": "planned"},
+                "agent_status": {"orchestrator": status},
             },
-            goto=END,
+            goto=next_goto,
         )
 
     # === 后续派活：按管道顺序逐个派 ===
@@ -189,4 +157,57 @@ async def orchestrator_node(state: GroupState) -> Command:
             "messages": [AIMessage(content=summary_text, name="orchestrator")],
         },
         goto=END,
+    )
+
+
+# ---------- HITL 审批门 ----------
+
+async def approval_gate_node(state: GroupState) -> Command:
+    """挂起 graph 等待人工审批；resume(Command(resume={"approved":bool, "reason":str}))
+    后根据决定 goto text_agent（通过）或 END（驳回）。
+
+    单独成节点的原因：interrupt() 会丢弃当前节点 update，把它放在 orchestrator
+    会让 dispatch_plan 落不了盘。orchestrator 先 commit plan → 这里再 interrupt。
+    """
+    plan = state.get("dispatch_plan")
+    plan_dict = plan.model_dump() if plan and hasattr(plan, "model_dump") else (plan or {})
+
+    decision = interrupt({
+        "kind": "approval_required",
+        "plan": plan_dict,
+        "group_id": state.get("group_id", "unknown"),
+    })
+
+    if isinstance(decision, dict):
+        approved = bool(decision.get("approved", False))
+        reason = str(decision.get("reason", "") or "")
+    else:
+        approved = bool(decision)
+        reason = ""
+
+    if not approved:
+        emit("rejected", reason=reason or "user_rejected")
+        return Command(
+            update={
+                "phase": "rejected",
+                "approved": False,
+                "agent_status": {"orchestrator": "rejected"},
+                "messages": [AIMessage(
+                    content=f"用户驳回派活方案（reason={reason or 'n/a'}）",
+                    name="orchestrator")],
+            },
+            goto=END,
+        )
+
+    _handoff("text_agent", "读取 Excel 新闻 + 生成 60 秒脚本", 1)
+    return Command(
+        update={
+            "approved": True,
+            "phase": "executing",
+            "agent_status": {"orchestrator": "dispatching"},
+            "messages": [AIMessage(
+                content="用户审批通过，开始执行派活计划。",
+                name="orchestrator")],
+        },
+        goto="text_agent",
     )

@@ -37,16 +37,22 @@ async def build_graph(checkpointer) -> CompiledStateGraph:
     # 延迟导入避免循环依赖
     from app.graph.nodes.audio_agent import audio_node
     from app.graph.nodes.image_agent import image_node
-    from app.graph.nodes.orchestrator import orchestrator_node
+    from app.graph.nodes.orchestrator import (
+        APPROVAL_GATE,
+        approval_gate_node,
+        orchestrator_node,
+    )
     from app.graph.nodes.text_agent import text_node
     from app.graph.nodes.video_agent import video_node
 
     g = StateGraph(GroupState)
 
-    # orchestrator 不重试（决策节点幂等无副作用，且 interrupt 无法重试）
+    # orchestrator / approval_gate：决策节点不挂 retry_policy
+    # （orchestrator 幂等无副作用；approval_gate 用 interrupt 不可重试）
     g.add_node("orchestrator", orchestrator_node)
+    g.add_node(APPROVAL_GATE, approval_gate_node)
 
-    # 4 个 specialist 节点都挂同一套 retry_policy
+    # 4 个 specialist 节点：统一 retry_policy（处理外部 API 偶发抖动）
     g.add_node("text_agent", text_node, retry_policy=SPECIALIST_RETRY)
     g.add_node("image_agent", image_node, retry_policy=SPECIALIST_RETRY)
     g.add_node("audio_agent", audio_node, retry_policy=SPECIALIST_RETRY)
@@ -55,7 +61,8 @@ async def build_graph(checkpointer) -> CompiledStateGraph:
     # 唯一一条静态边：入口
     g.add_edge(START, "orchestrator")
 
-    # 其他所有路由（orchestrator → specialist、specialist → orchestrator、orchestrator → END）
+    # 其他所有路由（orchestrator → specialist / approval_gate / END、
+    # specialist → orchestrator、approval_gate → text_agent / END）
     # 都在节点内部用 Command(goto=...) 表达，不在这里重复声明。
 
     return g.compile(checkpointer=checkpointer)
