@@ -189,6 +189,16 @@ export default function OutputsPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8">
+        {/* V0 阶段后端尚未实现"已发布 / 浏览量 / 互动"等指标，
+            页面用示例数据展示 V1 发布工作台的形态。真正的 agent 产出请见 <Link>。 */}
+        <div className="mb-6 rounded-xl border border-line bg-bg-sunken/60 px-5 py-3 text-xs text-ink-3 leading-relaxed">
+          <span className="font-medium text-ink-2">演示数据</span>
+          <span className="mx-2">·</span>
+          已发布 / 浏览量 / 互动等指标依赖 V1 一键发布能力，当前展示的是示例条目。
+          <Link href="/artifacts" className="ml-2 text-ink underline-offset-2 hover:underline">
+            查看真实产出 →
+          </Link>
+        </div>
         {/* 统计卡片 */}
         <div className="grid grid-cols-4 gap-4 mb-8">
           <div className="bg-bg-panel border border-line rounded-xl p-5">
