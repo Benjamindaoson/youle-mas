@@ -1,0 +1,36 @@
+# Demo skill — 小红书爆款标题
+# 纯 T agent skill，作为 V1 第一条端到端跑通的最简路径。
+id: xiaohongshu_hook_title
+name: 小红书爆款标题生成
+version: "1.0"
+description: |
+  根据用户给的产品/主题，生成 5 个小红书爆款风格的标题（含数字钩子、emoji、痛点）。
+deliverable_type: text
+
+intent_keywords:
+  - 小红书
+  - 爆款
+  - 标题
+  - 钩子
+  - hook
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.01
+
+steps:
+  - agent: T
+    task: 生成 5 个小红书爆款标题
+    prompt_template: |
+      你是小红书爆款标题专家。为以下主题写 5 个标题：
+      主题: {subject}
+      要求：
+      - 每条 ≤20 字
+      - 至少 2 条带数字钩子（如"3 个秘密"、"100 块"、"7 天"）
+      - 至少 3 条带 emoji
+      - 突出痛点或反差感
+
+      用 markdown 列表输出。
+    outputs:
+      - text-asset (titles)

@@ -1,0 +1,64 @@
+# Demo skill — 电商主图生成
+# V1 第一个端到端跑通的目标 skill。
+# Conductor 通过 intent_keywords 命中后召回 → T 写 prompt → I 出图 → T 写描述
+id: ecommerce_main_image
+name: 电商主图生成
+version: "1.0"
+description: |
+  生成符合电商平台主图规范的产品图（白底 + 场景双版本），并配 alt 文案。
+  适用于淘宝/京东/小红书电商。
+deliverable_type: image
+
+intent_keywords:
+  - 主图
+  - 电商图
+  - 产品图
+  - 商品图
+  - 详情页
+
+required_slots:
+  - product_name
+  - target_platform
+
+optional_slots:
+  - reference_image
+  - color_scheme
+  - style_keywords
+
+expected_cost_usd: 0.05
+
+steps:
+  - agent: T
+    task: 撰写图片生成 prompt（产品文案 + 视觉描述）
+    prompt_template: |
+      你是电商图视觉策划。基于以下信息写两条 SD/Flux 风格的英文 prompt：
+      产品: {subject}
+      行业垂直: {vertical}
+      用户原话: {raw}
+
+      第 1 条：白底主图风格
+      第 2 条：场景化主图风格
+
+      只输出 JSON：
+      {"prompts": ["...", "..."]}
+    outputs:
+      - prompts (text)
+
+  - agent: I
+    task: 按 prompt 生成主图（白底版 + 场景版）
+    inputs:
+      prompts: ${steps[0].output.prompts}
+    outputs:
+      - image-asset (white_bg)
+      - image-asset (scene)
+
+  - agent: T
+    task: 写图片 alt 文案 + 详情页 caption
+    inputs:
+      images: ${steps[1].outputs}
+    prompt_template: |
+      为以上电商主图写 1 条 SEO 友好的 alt 文案（≤60 字）+ 1 段详情页副标题（≤120 字）。
+      产品: {subject}
+    outputs:
+      - text-asset (alt)
+      - text-asset (caption)

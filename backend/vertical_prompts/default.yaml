@@ -1,0 +1,21 @@
+# 行业垂直 prompt 增量
+# 加载顺序：base_prompt (能力 agent 自带) → vertical_prompts/{vertical}.yaml
+#         → skill.prompt_template
+# default 适用于 vertical=other 时
+vertical: default
+
+T:
+  prefix: ""
+  suffix: ""
+
+I:
+  prefix: ""
+  suffix: ""
+
+V:
+  prefix: ""
+  suffix: ""
+
+D:
+  prefix: ""
+  suffix: ""
