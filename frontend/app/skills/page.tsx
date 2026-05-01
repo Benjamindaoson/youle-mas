@@ -1,12 +1,14 @@
 'use client';
 
-import { useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ArrowLeft, Loader2, Sparkles } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { ROLES, ROLE_COLORS, type RoleId } from '@/lib/types';
+import { listV1Skills, type V1Skill, type V1CapabilityKey } from '@/lib/api';
 
-// 手艺数据
+// 旧的「员工能力」demo 数据 — 保留作为视觉参考。
+// V1 真后端的 skill 在页面最上方单独展示。
 const ALL_SKILLS = [
   // 文本(5)
   {id:'s1', cat:'text', name:'文案写作', desc:'短平快的社媒文案 / 广告语 / 标题', model:'deepseek', energy:'3⚡', equipped:['writer'] as RoleId[]},
@@ -43,8 +45,40 @@ const FILTERS = [
   { id: 'collab', label: '协作' },
 ];
 
+const CAPABILITY_LABEL: Record<V1CapabilityKey, string> = {
+  T: '文字',
+  I: '图',
+  V: '视频',
+  D: '办公文档',
+};
+
+const CAPABILITY_COLOR: Record<V1CapabilityKey, string> = {
+  T: 'bg-amber-100 text-amber-800',
+  I: 'bg-emerald-100 text-emerald-800',
+  V: 'bg-pink-100 text-pink-800',
+  D: 'bg-cyan-100 text-cyan-800',
+};
+
 export default function SkillsPage() {
   const [activeFilter, setActiveFilter] = useState('all');
+  const [v1Skills, setV1Skills] = useState<V1Skill[]>([]);
+  const [v1Loading, setV1Loading] = useState(true);
+  const [v1Error, setV1Error] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const skills = await listV1Skills();
+        if (!cancelled) setV1Skills(skills);
+      } catch (e) {
+        if (!cancelled) setV1Error(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setV1Loading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const equippedCount = ALL_SKILLS.filter(s => s.equipped.length > 0).length;
   const filteredSkills = ALL_SKILLS.filter(s => {
@@ -54,7 +88,6 @@ export default function SkillsPage() {
 
   return (
     <div className="min-h-screen bg-bg">
-      {/* 顶部导航 */}
       <header className="sticky top-0 z-10 bg-bg border-b border-line">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
           <Link href="/" className="p-2 hover:bg-bg-hover rounded-lg transition-colors">
@@ -62,61 +95,138 @@ export default function SkillsPage() {
           </Link>
           <div>
             <h1 className="font-serif text-xl font-semibold text-ink">能力库</h1>
-            <p className="text-sm text-ink-3">所有手艺一览 · 装备给合适的员工</p>
+            <p className="text-sm text-ink-3">Skill 市场（V1 真后端） + 员工能力 demo</p>
           </div>
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
-        {/* Hero 区 + 统计 */}
-        <div className="bg-gradient-to-br from-bg-sunken to-bg-hover rounded-xl p-6 mb-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="font-serif text-2xl font-semibold text-ink mb-2">
-                团队的能力武器库
-              </h2>
-              <p className="font-serif italic text-ink-2 text-sm">
-                给员工装备合适的手艺，让 ta 们更强大
-              </p>
-            </div>
-            <div className="flex gap-6">
-              <div className="text-center">
-                <span className="font-serif text-2xl font-semibold text-ink">{ALL_SKILLS.length}</span>
-                <p className="text-xs text-ink-3 mt-0.5">项手艺</p>
-              </div>
-              <div className="text-center">
-                <span className="font-serif text-2xl font-semibold text-ink">{equippedCount}</span>
-                <p className="text-xs text-ink-3 mt-0.5">已装备</p>
-              </div>
-            </div>
+        {/* ============ V1 Skill 市场（真后端 / mock 兜底） ============ */}
+        <section className="mb-10">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles className="w-4 h-4 text-active" />
+            <h2 className="font-serif text-lg font-semibold text-ink">
+              Skill 市场
+            </h2>
+            <span className="text-xs text-ink-3">
+              · 主编排 agent 会按用户意图自动调用
+            </span>
           </div>
-        </div>
+          <p className="text-sm text-ink-3 mb-4">
+            每个 skill 是一个 workflow，主编排理解你的话之后自动选并派给对应能力 agent
+            (T/I/V/D)。你不直接选 skill。
+          </p>
 
-        {/* 筛选条 */}
-        <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
-          {FILTERS.map((filter) => (
-            <button
-              key={filter.id}
-              onClick={() => setActiveFilter(filter.id)}
-              className={cn(
-                'px-4 py-1.5 text-sm rounded-full whitespace-nowrap transition-colors',
-                activeFilter === filter.id
-                  ? 'bg-ink text-white'
-                  : 'bg-bg-sunken text-ink-2 hover:bg-bg-hover'
-              )}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </div>
+          {v1Loading ? (
+            <div className="flex items-center gap-2 py-8 text-ink-3">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span className="text-sm">读取 skill 注册表...</span>
+            </div>
+          ) : v1Error ? (
+            <div className="text-sm text-ink-3 py-4">
+              读取失败：{v1Error}
+            </div>
+          ) : v1Skills.length === 0 ? (
+            <div className="text-sm text-ink-3 py-4">
+              skill 注册表为空。检查 backend/skills/ 目录是否存在 yaml。
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              {v1Skills.map((sk) => (
+                <V1SkillCard key={sk.id} skill={sk} />
+              ))}
+            </div>
+          )}
+        </section>
 
-        {/* 手艺卡片网格 */}
-        <div className="grid grid-cols-3 gap-4">
-          {filteredSkills.map((skill) => (
-            <SkillCard key={skill.id} skill={skill} />
-          ))}
-        </div>
+        {/* ============ 旧的"员工手艺"展示（保留作为视觉参考） ============ */}
+        <section className="border-t border-line pt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-serif text-lg font-semibold text-ink">
+              员工能力（视觉概念）
+            </h2>
+            <span className="text-xs text-ink-3">
+              {equippedCount}/{ALL_SKILLS.length} 已装备
+            </span>
+          </div>
+          <p className="text-sm text-ink-3 mb-4">
+            以下是按"装备给员工"的视觉模型展示能力。真正的能力调度走 V1 主编排（上方 Skill 市场）。
+          </p>
+
+          <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+            {FILTERS.map((filter) => (
+              <button
+                key={filter.id}
+                onClick={() => setActiveFilter(filter.id)}
+                className={cn(
+                  'px-4 py-1.5 text-sm rounded-full whitespace-nowrap transition-colors',
+                  activeFilter === filter.id
+                    ? 'bg-ink text-white'
+                    : 'bg-bg-sunken text-ink-2 hover:bg-bg-hover'
+                )}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            {filteredSkills.map((skill) => (
+              <SkillCard key={skill.id} skill={skill} />
+            ))}
+          </div>
+        </section>
       </main>
+    </div>
+  );
+}
+
+function V1SkillCard({ skill }: { skill: V1Skill }) {
+  const stepCount = skill.steps?.length ?? 0;
+  const isRunner = !!skill.runner;
+  return (
+    <div className="bg-bg-panel border border-line rounded-xl p-4 hover:shadow-md transition-all">
+      <div className="flex items-start justify-between mb-1.5">
+        <h3 className="font-serif font-medium text-ink text-sm">{skill.name}</h3>
+        <span className="px-1.5 py-0.5 bg-bg-sunken text-ink-3 text-[10px] font-mono rounded">
+          {skill.deliverable_type}
+        </span>
+      </div>
+      <p className="font-mono text-[10px] text-ink-4 mb-2">{skill.id}</p>
+      <p className="text-[12px] text-ink-3 mb-3 line-clamp-3 min-h-[54px]">
+        {skill.description.split('\n')[0] ?? skill.description}
+      </p>
+
+      <div className="border-t border-dashed border-line pt-2.5 mb-2 flex items-center gap-1.5 flex-wrap">
+        <span className="text-[10px] text-ink-4">能力链:</span>
+        {skill.steps && skill.steps.length > 0 ? (
+          skill.steps.map((s, i) => (
+            <span
+              key={i}
+              className={cn(
+                'px-1.5 py-0 text-[10px] font-mono rounded',
+                CAPABILITY_COLOR[s.agent]
+              )}
+              title={s.task}
+            >
+              {CAPABILITY_LABEL[s.agent] ?? s.agent}
+            </span>
+          ))
+        ) : (
+          <span className="text-[10px] text-ink-4 italic">仅由 runner 执行</span>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-ink-4">
+          {isRunner ? 'Python runner' : `${stepCount} 步声明式`}
+        </span>
+        {skill.expected_cost_usd > 0 && (
+          <span className="text-[10px] text-ink-3 font-mono">
+            ≈ ${skill.expected_cost_usd.toFixed(2)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -124,7 +234,6 @@ export default function SkillsPage() {
 function SkillCard({ skill }: { skill: typeof ALL_SKILLS[0] }) {
   return (
     <div className="bg-bg-panel border border-line rounded-xl p-4 hover:shadow-md hover:-translate-y-0.5 transition-all">
-      {/* 顶部 */}
       <div className="flex items-start justify-between mb-2">
         <h3 className="font-serif font-medium text-ink text-sm">{skill.name}</h3>
         <span className="px-1.5 py-0.5 bg-busy/10 text-busy text-[10px] font-mono rounded">
@@ -132,12 +241,10 @@ function SkillCard({ skill }: { skill: typeof ALL_SKILLS[0] }) {
         </span>
       </div>
 
-      {/* 描述 */}
       <p className="font-serif text-[11px] text-ink-3 min-h-[38px] mb-3">
         {skill.desc}
       </p>
 
-      {/* 底层模型 */}
       <div className="border-t border-dashed border-line pt-3 mb-3 flex items-center justify-between">
         <span className="text-[10px] text-ink-4">底层模型</span>
         <span className="px-2 py-0.5 bg-bg-sunken text-ink-3 text-[10px] rounded">
@@ -145,7 +252,6 @@ function SkillCard({ skill }: { skill: typeof ALL_SKILLS[0] }) {
         </span>
       </div>
 
-      {/* 已装备区 */}
       <div className="mb-3">
         {skill.equipped.length > 0 ? (
           <div className="flex items-center gap-2">
@@ -174,7 +280,6 @@ function SkillCard({ skill }: { skill: typeof ALL_SKILLS[0] }) {
         )}
       </div>
 
-      {/* 按钮 */}
       <div className="flex gap-2">
         <button className="flex-1 py-1.5 text-xs text-ink-3 hover:text-ink transition-colors">
           详情

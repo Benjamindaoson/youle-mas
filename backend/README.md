@@ -1,16 +1,38 @@
-# Youle Backend — Multi-Agent Chat + Anti-Fraud Video Demo
+# Youle Backend — Conductor + 4 Capability Agents + Skill Marketplace
 
-One-sentence: FastAPI backend serving the `frontend/` Next.js UI: 9-employee role-based chat (`/chat`, `/chat/team`) plus a keyword-triggered anti-fraud short-video LangGraph pipeline.
+FastAPI backend for `frontend/`. The default model is **V1**: a Conductor LLM that
+parses user intent, picks a matching skill from the YAML registry, and dispatches
+work to the four capability agents (T / I / V / D). The V0 9-role chat layer is
+kept for reference under `/legacy` on the frontend, but is no longer the default.
 
-## V0 Scope
+Architecture contract: see [`../docs/v1-architecture.md`](../docs/v1-architecture.md).
+
+## V1 Endpoints (current)
+
+- `POST /v1/conduct` — main Conductor SSE stream (intent → clarify? → skill → dispatch → deliver)
+- `GET  /v1/skills`  — registered skills (YAML scanned from `backend/skills/`)
+- `GET  /skills`     — same payload, alias for V0-compat tooling
+- Capability agents at `app/capabilities/{text,image,video,doc}.py` share a single
+  `run(task, intent, upstream, session_id)` async-generator interface
+
+## V0 Endpoints (kept for `/legacy` and gradual migration)
+
+- `POST /chat`       — single-role streaming, 9 employees
+- `POST /chat/team`  — group dispatch + anti-fraud pipeline (now routed through skill registry)
+- `POST /chat/team/resume/{thread_id}` — HITL resume after `clarify_required`
+- `/agents`, `/artifacts*`, `/auth*`, `/chat/archive*`, `/history*`, `/upload`, `/health`
+
+## Scope (V1 baseline)
 
 **Does**:
-- 9-employee role-based single chat & team dispatch (heuristic dispatcher; Anthropic streaming when `ANTHROPIC_API_KEY` is set, DEMO templates otherwise)
-- Anti-fraud video pipeline (5-node LangGraph) triggered when the user message contains "反诈视频/反诈短视频/anti-scam"
-- SSE streaming, artifact storage, file upload, archive, history, auth tier
-- Full fallback chain (no key → templates / placeholder media)
+- Conductor with structured-output intent parsing (Anthropic when `ANTHROPIC_API_KEY` set, heuristic fallback otherwise) + clarify loop + skill retriever
+- 4 capability agents with full fallback chains (no key → templates / placeholder media)
+- Skill registry: declarative DAG (`steps`) and Python `runner` skills both supported
+- Per-vertical prompt layering via `backend/vertical_prompts/{vertical}.yaml`
+- Anti-fraud pipeline kept available, but now as `skills/anti_scam_video.yaml` (runner-based) — keyword routing replaced by registry-driven matching
+- SSE streaming, artifact persistence with concurrency-safe manifest writes, file upload, archive, history, observability trace store
 
-**Does not**: auth (real), billing, multi-tenant, K8s, PostgreSQL, Redis, knowledge base, cross-group references, one-click publish.
+**Does not (V1 out of scope, deferred to V2+)**: real auth / SSO, billing, multi-tenant, K8s, PostgreSQL, Redis, RAG knowledge base, cross-session memory, one-click publishing.
 
 ## Requirements
 

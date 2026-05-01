@@ -11,6 +11,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from app.config import settings
 from app.logging_config import setup_logging, logger
 from app.graph.builder import build_graph
+from app.observability import LocalTraceCallback, TraceStore
+from app.skills.registry import load_all as load_v1_skills
 
 
 @asynccontextmanager
@@ -48,15 +50,27 @@ async def lifespan(app: FastAPI):
 
     # 确保数据目录存在
     for d in [settings.ARTIFACT_DIR, settings.UPLOAD_DIR,
-              os.path.dirname(settings.CHECKPOINT_PATH), "./data/history"]:
+              os.path.dirname(settings.CHECKPOINT_PATH),
+              os.path.dirname(settings.OBSERVABILITY_DB),
+              "./data/history"]:
         os.makedirs(d, exist_ok=True)
+
+    # 本地可观测性 trace store（同步 SQLite，零外部依赖）
+    trace_store = TraceStore(settings.OBSERVABILITY_DB)
+    app.state.trace_store = trace_store
+    app.state.trace_callback = LocalTraceCallback(trace_store)
+
+    # V1 skill 市场：扫描 backend/skills/*.yaml 加载到内存
+    n_skills = load_v1_skills()
+    logger.info("v1_skills_loaded", count=n_skills)
 
     # 初始化 SQLite 检查点 + 编译 LangGraph
     async with AsyncSqliteSaver.from_conn_string(settings.CHECKPOINT_PATH) as cp:
         app.state.graph = await build_graph(cp)
         app.state.settings = settings
         app.state.checkpointer = cp
-        logger.info("youle-backend 已启动", demo_mode=settings.DEMO_MODE, port=8001)
+        logger.info("youle-backend 已启动", demo_mode=settings.DEMO_MODE, port=8001,
+                    observability_db=settings.OBSERVABILITY_DB)
         yield
 
 
@@ -72,7 +86,9 @@ app.add_middleware(
 )
 
 from app.api.routes import router  # noqa: E402  # 延迟导入避免循环依赖
+from app.observability.api import router as observability_router  # noqa: E402
 app.include_router(router)
+app.include_router(observability_router)
 
 
 @app.get("/health")

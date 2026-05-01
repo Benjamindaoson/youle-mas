@@ -1,0 +1,45 @@
+# 反诈短视频 skill — V0 写死的 LangGraph 流水线，Phase 0 封装为 skill。
+#
+# 这是首个 builtin skill，作用：
+#   1. 验证 SkillSpec.runner 机制（指向 Python 入口而非纯声明式 DAG）
+#   2. 让 /chat/team 不再用关键词分支，统一走 skill registry
+#   3. 给后续 skill（电商主图、小红书标题等）做模板
+id: anti_scam_video
+name: 反诈短视频生产
+version: "1.0"
+description: |
+  把 Excel 新闻数据转成 60 秒反诈短视频（脚本→配图→TTS→FFmpeg 合成）。
+  V0 写死的 5 节点 LangGraph 流水线，封装为 skill 后由编排 agent 召唤。
+deliverable_type: video
+
+intent_keywords:
+  - 反诈视频
+  - 反诈短视频
+  - 防诈视频
+  - anti-scam
+  - antiscam
+  - anti scam
+
+# V0 流水线对 Excel 输入是软依赖（无文件时用内置样例），所以 required_slots 留空
+required_slots: []
+optional_slots:
+  - input_file_path  # 上传的 Excel/CSV 路径
+
+expected_cost_usd: 0.05
+
+# 指向 Python runner（包装 LangGraph 调用）。
+# 解析规则：app.skills.registry._resolve_runner('module.path:func')
+runner: app.skills.builtin.anti_scam_video.runner:run
+
+# steps 留空 — 本 skill 走 runner 路径，不走声明式 DAG。
+# 但保留字段是为了 /skills 接口能展示"这 skill 大概做哪些步骤"给用户看：
+steps:
+  - agent: T
+    task: 读 Excel 新闻 + 生成 60 秒反诈口播稿
+    outputs: [video-script]
+  - agent: I
+    task: 准备 10 张警示风格配图（4 级 fallback）
+    outputs: [image-asset]
+  - agent: V
+    task: TTS 配音 + BGM + 字幕 + FFmpeg 合成 mp4
+    outputs: [video-asset, voice-asset, subtitle-asset, thumbnail]

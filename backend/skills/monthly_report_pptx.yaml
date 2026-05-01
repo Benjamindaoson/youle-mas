@@ -1,0 +1,47 @@
+# Demo skill — 月度数据复盘 PPT
+# 三步声明式：T 写大纲 → D 生成 PPT
+id: monthly_report_pptx
+name: 月度数据复盘 PPT
+version: "1.0"
+description: |
+  根据用户给的主题/数据，先让 T agent 写出 4-6 页的 markdown 大纲，
+  再让 D agent 用 python-pptx 把大纲渲染成 PPT。
+deliverable_type: doc
+
+intent_keywords:
+  - 月报
+  - 周报
+  - 季报
+  - 复盘
+  - 复盘 PPT
+  - PPT
+  - 演示
+  - 报告
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.02
+
+steps:
+  - agent: T
+    task: 撰写月度复盘大纲（markdown，4-6 个二级标题，每个二级标题下 3-5 个要点）
+    prompt_template: |
+      为以下主题写一份月度复盘大纲，markdown 格式：
+
+      主题: {subject}
+      行业: {vertical}
+      用户原话: {raw}
+
+      要求：
+      - 4-6 个二级标题（## 开头）
+      - 每个二级标题下 3-5 个要点（- 开头）
+      - 内容包括：本月成果 / 关键指标 / 问题与改进 / 下月计划
+      - 不要出现"我"或"作为 AI"
+    outputs:
+      - text-asset (outline)
+
+  - agent: D
+    task: 把大纲渲染成 pptx
+    outputs:
+      - pptx

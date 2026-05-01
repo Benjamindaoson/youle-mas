@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     ARTIFACT_DIR: str = "./data/artifacts"
     UPLOAD_DIR: str = "./data/uploads"
     CHECKPOINT_PATH: str = "./data/checkpoints/checkpoints.db"
+    OBSERVABILITY_DB: str = "./data/observability/traces.db"
     CORS_ORIGIN: str = "http://localhost:3000"
     DEFAULT_BGM_PATH: str = "./assets/bgm/default_warning.mp3"
 
