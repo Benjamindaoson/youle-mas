@@ -919,7 +919,21 @@ export interface ResourceItem {
   icon: string;
   name: string;
   badge?: number;
-  href: string;
+  /** 站内路由（无 externalHref 时使用） */
+  href?: string;
+  /** 外站完整 URL，新标签打开（如后端 /observability） */
+  externalHref?: string;
+}
+
+/** 与 NEXT_PUBLIC_AGENT_SERVER_URL 同源的后端 Observability（默认 localhost:8001） */
+export function observabilityDashboardUrl(): string {
+  const raw =
+    typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_AGENT_SERVER_URL : '';
+  const base =
+    typeof raw === 'string' && raw.trim().length > 0
+      ? raw.replace(/\/$/, '')
+      : 'http://127.0.0.1:8001';
+  return `${base}/observability`;
 }
 
 // 消息类型
@@ -1301,13 +1315,17 @@ export const WORK_GROUPS: WorkGroup[] = [
   },
 ];
 
-// 资源导航
+// 资源导航 — 删去 V1 范围条目（market / knowledge），保留 V0 已实现部分
 export const RESOURCES: ResourceItem[] = [
-  { id: 'market', icon: '🤖', name: 'Agent 人才市场', badge: 5, href: '/market' },
   { id: 'school', icon: '🎓', name: 'AI 学院', badge: 8, href: '/school' },
-  { id: 'knowledge', icon: '📚', name: '知识库', badge: 28, href: '/knowledge' },
   { id: 'capabilities', icon: '⚡', name: '能力库', badge: 8, href: '/capabilities' },
-  { id: 'outputs', icon: '📝', name: '成果库', badge: 12, href: '/outputs' },
+  { id: 'artifacts', icon: '📝', name: '成果库', href: '/artifacts' },
+  {
+    id: 'observability',
+    icon: '🔭',
+    name: '运行观测',
+    externalHref: observabilityDashboardUrl(),
+  },
 ];
 
 // 岗位色映射

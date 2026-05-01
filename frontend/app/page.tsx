@@ -53,12 +53,12 @@ export default function Home() {
   };
 
   const handleNavigate = (page: string) => {
+    // V1 范围的 market / knowledge 已删除；保留 V0 已实现路由
     const routes: Record<string, string> = {
-      market: '/market',
       school: '/school',
-      knowledge: '/knowledge',
       skills: '/skills',
       artifacts: '/artifacts',
+      capabilities: '/capabilities',
     };
     if (routes[page]) router.push(routes[page]);
   };

@@ -1,15 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { Settings, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppStore } from '@/lib/store';
-import { 
-  ROLES, 
-  RESOURCES, 
+import {
+  ROLES,
+  RESOURCES,
   ROLE_COLORS,
   type RoleId,
-  type WorkGroup 
+  type WorkGroup,
 } from '@/lib/types';
 
 interface SidebarProps {
@@ -87,13 +87,6 @@ export function Sidebar({
                 onClick={() => onSelectEmployee(employee.id)}
               />
             ))}
-            <Link
-              href="/market"
-              className="w-full mt-2 py-2 border border-dashed border-line-2 rounded-lg text-ink-3 text-xs hover:bg-bg-hover transition-colors flex items-center justify-center gap-1"
-            >
-              <Plus className="w-3 h-3" />
-              招募 Agent
-            </Link>
           </div>
         </div>
 
@@ -111,41 +104,13 @@ export function Sidebar({
         </div>
       </div>
 
-      {/* 底部 */}
-      <div className="p-3 border-t border-line space-y-3">
-        {/* 能量卡片 */}
-        <div className="bg-bg-panel rounded-lg p-3 border border-line">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1.5">
-              <span className="text-busy">&#9889;</span>
-              <span className="font-mono text-sm font-medium text-ink">1,284</span>
-            </div>
-            <span className="px-1.5 py-0.5 bg-active/10 text-active text-[10px] rounded font-medium">
-              免费体验
-            </span>
-          </div>
-          <div className="mt-2 h-1 bg-bg-sunken rounded-full overflow-hidden">
-            <div className="h-full bg-busy rounded-full" style={{ width: '64%' }} />
-          </div>
-          <p className="text-[10px] text-ink-4 mt-1">本周已用 128 · 剩余 1,284</p>
-        </div>
-
-        {/* 用户信息 */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-ink rounded-full flex items-center justify-center">
-              <span className="text-white text-xs">王</span>
-            </div>
-            <span className="text-sm text-ink">王小明</span>
-          </div>
-          <Link
-            href="/settings"
-            aria-label="设置"
-            title="设置"
-            className="p-1.5 hover:bg-bg-hover rounded-md transition-colors"
-          >
-            <Settings className="w-4 h-4 text-ink-3" />
-          </Link>
+      {/* 底部 — V0 阶段无账号系统 / 计费，只展示 DEMO 标识 */}
+      <div className="p-3 border-t border-line">
+        <div className="flex items-center justify-between text-[11px] text-ink-3">
+          <span className="font-medium">Youle V0</span>
+          <span className="px-1.5 py-0.5 bg-active/10 text-active rounded font-medium">
+            DEMO
+          </span>
         </div>
       </div>
     </aside>
@@ -286,16 +251,31 @@ function ResourceNavItem({
 }: { 
   item: typeof RESOURCES[0];
 }) {
+  const cls =
+    'w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-ink-2 hover:bg-bg-hover transition-colors';
+  if (item.externalHref) {
+    return (
+      <a
+        href={item.externalHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cls}
+      >
+        <span>{item.icon}</span>
+        <span className="flex-1 text-left">{item.name}</span>
+        {item.badge != null ? (
+          <span className="text-[10px] text-ink-4 font-mono">{item.badge}</span>
+        ) : null}
+      </a>
+    );
+  }
   return (
-    <Link
-      href={item.href}
-      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-ink-2 hover:bg-bg-hover transition-colors"
-    >
+    <Link href={item.href ?? '/'} className={cls}>
       <span>{item.icon}</span>
       <span className="flex-1 text-left">{item.name}</span>
-      {item.badge && (
+      {item.badge != null ? (
         <span className="text-[10px] text-ink-4 font-mono">{item.badge}</span>
-      )}
+      ) : null}
     </Link>
   );
 }
