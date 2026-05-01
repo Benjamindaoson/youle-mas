@@ -38,6 +38,8 @@ from app.schemas.state import GroupState
 from app.logging_config import logger
 from app.agents.role_chat import stream_role_reply, role_meta
 from app.agents.dispatcher import plan_dispatch, is_antiscam_video_request
+from app.conductor import conduct as v1_conduct
+from app.skills.registry import list_skills as v1_list_skills, load_all as v1_load_skills
 
 router = APIRouter()
 
@@ -222,7 +224,8 @@ async def chat_team(request: Request, req: TeamChatRequest):
 
     if is_antiscam_video_request(req.message):
         graph = request.app.state.graph
-        return _stream_antiscam_pipeline(graph, session_id, req)
+        cb = getattr(request.app.state, "trace_callback", None)
+        return _stream_antiscam_pipeline(graph, session_id, req, trace_callback=cb)
 
     return _stream_generic_team(session_id, req)
 
@@ -379,7 +382,13 @@ def _antiscam_initial_state(session_id: str, message: str, *, approved: bool,
                              require_approval: bool) -> tuple[GroupState, dict]:
     """构造 LangGraph 初始 state + config（thread_id 用于 checkpoint resume）。"""
     group_id = _safe_dir(session_id)
-    config = {"configurable": {"thread_id": f"group_{group_id}"}, "recursion_limit": 50}
+    thread_id = f"group_{group_id}"
+    # metadata['thread_id'] 让 LocalTraceCallback 能读出 thread_id 关联 trace
+    config = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": 50,
+        "metadata": {"thread_id": thread_id, "session_id": session_id},
+    }
     initial_state: GroupState = {
         "group_id": group_id, "thread_id": f"group_{group_id}",
         "user_goal": message, "phase": "planning",
@@ -396,14 +405,22 @@ def _antiscam_initial_state(session_id: str, message: str, *, approved: bool,
 async def _stream_graph_events(graph, stream_input, config, session_id: str):
     """把 LangGraph astream(updates+custom) 事件适配成前端 SSE 事件流。
 
-    - mode='custom'  → 节点用 emit() 推的 {"kind":..., ...} 直接转 SSE
-    - mode='updates' → 拿到节点 update dict 后：
-        * artifacts 增量 → _save_artifact_to_outputs 落盘 → artifact_saved
-        * __interrupt__  → 停止流并返回 approval_required
-    - 末尾若 graph 跑完，根据 final state 推 chief summary + done
+    关键不变量：**astream 必须自然耗尽**才能让 LangGraph 完成 checkpoint commit。
+    如果 client 提前 break + server 跟着 return，会触发 generator close → astream
+    aclose → 内部 task cancel → checkpoint 回滚（resume 时看到 next=()）。
+
+    所以 interrupt 路径也是：先把所有 yield 都缓存（buffered），等 astream 跑完
+    再一次性 flush。代价：interrupt 场景非真流式（但本来 interrupt 也只有 1-2 个
+    super-step，没多少可流的）。Non-interrupt 场景仍然真流式。
     """
-    summary_seen = False
+    pending: list[str] = []
+    interrupt_seen = False
     artifact_seen: set[str] = set()
+
+    def _flush():
+        nonlocal pending
+        out, pending = pending, []
+        return out
 
     async for mode, ev in graph.astream(
         stream_input,
@@ -412,61 +429,63 @@ async def _stream_graph_events(graph, stream_input, config, session_id: str):
     ):
         if mode == "custom":
             kind = ev.pop("kind", "progress")
-            yield _sse({"type": kind, **ev})
-            continue
-
-        if mode != "updates":
-            continue
-
-        for node_name, update in ev.items():
-            # interrupt 事件：node_name == "__interrupt__"
-            if node_name == "__interrupt__":
-                interrupts = update if isinstance(update, list) else [update]
-                payloads = []
-                for it in interrupts:
-                    val = getattr(it, "value", it)
-                    payloads.append(val)
-                yield _sse({
-                    "type": "approval_required",
-                    "thread_id": config["configurable"]["thread_id"],
-                    "interrupts": payloads,
-                })
-                # 后续不再有事件，让外层结束
-                return
-
-            update = update or {}
-            # artifacts 增量 → 落盘到 outputs/{sid}/manifest.json
-            for art in update.get("artifacts", []) or []:
-                ad = art.model_dump() if hasattr(art, "model_dump") else art
-                art_id = ad.get("id")
-                if art_id and art_id in artifact_seen:
+            pending.append(_sse({"type": kind, **ev}))
+        elif mode == "updates":
+            for node_name, update in ev.items():
+                # interrupt 事件：node_name == "__interrupt__"，update 是 tuple[Interrupt, ...]
+                if node_name == "__interrupt__":
+                    interrupts_iter = update if isinstance(update, (list, tuple)) else [update]
+                    payloads = []
+                    for it in interrupts_iter:
+                        val = getattr(it, "value", None)
+                        if val is None:
+                            val = it if isinstance(it, dict) else {"raw": str(it)}
+                        payloads.append(val)
+                    pending.append(_sse({
+                        "type": "approval_required",
+                        "thread_id": config["configurable"]["thread_id"],
+                        "interrupts": payloads,
+                    }))
+                    interrupt_seen = True
                     continue
-                if art_id:
-                    artifact_seen.add(art_id)
-                fe_id, fe_name, step_idx, _ = _fe_for(ad.get("by_agent", node_name))
-                m = _save_artifact_to_outputs(session_id, step_idx, fe_id, fe_name, ad)
-                if m:
-                    yield _sse({"type": "artifact_saved", "manifest": m})
 
-            # orchestrator 进入 done 阶段时记录 summary（用于历史落盘）
-            if node_name == "orchestrator" and update.get("phase") == "done":
-                summary_seen = True
+                update = update or {}
+                for art in update.get("artifacts", []) or []:
+                    ad = art.model_dump() if hasattr(art, "model_dump") else art
+                    art_id = ad.get("id")
+                    if art_id and art_id in artifact_seen:
+                        continue
+                    if art_id:
+                        artifact_seen.add(art_id)
+                    fe_id, fe_name, step_idx, _ = _fe_for(ad.get("by_agent", node_name))
+                    m = _save_artifact_to_outputs(session_id, step_idx, fe_id, fe_name, ad)
+                    if m:
+                        pending.append(_sse({"type": "artifact_saved", "manifest": m}))
 
-    # 正常跑完
-    if summary_seen:
+        # 仅在非 interrupt 路径上立刻 flush 缓存（保留真流式）
+        # 一旦看到 interrupt，就暂存所有后续事件，等 astream 自然结束再 flush
+        if not interrupt_seen:
+            for sse in _flush():
+                yield sse
+
+    # astream 已自然耗尽 → checkpoint 已 commit。flush 剩余 buffered 事件。
+    for sse in _flush():
+        yield sse
+    # interrupt 路径不发 done，让前端识别"挂起"；非 interrupt 路径发 done
+    if not interrupt_seen:
         yield _sse({"type": "done"})
-    else:
-        # 走到这里说明 graph 没 hit interrupt 也没 phase='done'（一般是 unapproved 路径）
-        yield _sse({"type": "done"})
 
 
-def _stream_antiscam_pipeline(graph, session_id: str, req: TeamChatRequest) -> StreamingResponse:
+def _stream_antiscam_pipeline(graph, session_id: str, req: TeamChatRequest,
+                               trace_callback=None) -> StreamingResponse:
     """关键词命中"反诈视频"时走 LangGraph 流水线（真流式 / 支持 HITL interrupt）。"""
     initial_state, config = _antiscam_initial_state(
         session_id, req.message,
         approved=not req.require_approval,
         require_approval=req.require_approval,
     )
+    if trace_callback is not None:
+        config["callbacks"] = [trace_callback]
 
     async def event_stream():
         yield _sse({"type": "start", "mode": "team", "session_id": session_id,
@@ -502,9 +521,28 @@ async def resume_team(thread_id: str, body: ResumeRequest, request: Request):
     返回新的 SSE 事件流（接着上次 interrupt 处继续跑，直到再次 interrupt 或完成）。
     """
     graph = request.app.state.graph
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
+    cb = getattr(request.app.state, "trace_callback", None)
+    config: dict = {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": 50,
+        "metadata": {"thread_id": thread_id, "resumed": True},
+    }
+    if cb is not None:
+        config["callbacks"] = [cb]
     # 反推 session_id（thread_id 形如 group_{safe_sid}）
     session_id = thread_id[len("group_"):] if thread_id.startswith("group_") else thread_id
+
+    # 校验 checkpoint 是否存在；不存在直接 400，避免静默从头重跑
+    snap = await graph.aget_state(config)
+    if not snap.tasks and not snap.values.get("dispatch_plan"):
+        logger.warning("resume_no_checkpoint", thread_id=thread_id)
+        return JSONResponse(
+            status_code=404,
+            content={"error": "no_checkpoint",
+                     "message": f"thread_id={thread_id} 无挂起的 checkpoint，无法 resume",
+                     "thread_id": thread_id})
+    logger.info("resume_team", thread_id=thread_id, next=str(snap.next),
+                approved=body.approved)
 
     cmd = LGCommand(resume={
         "approved": body.approved,
@@ -513,13 +551,61 @@ async def resume_team(thread_id: str, body: ResumeRequest, request: Request):
 
     async def event_stream():
         yield _sse({"type": "start", "mode": "team-resume",
-                    "thread_id": thread_id, "approved": body.approved})
+                    "thread_id": thread_id, "approved": body.approved,
+                    "snapshot_next": list(snap.next) if snap.next else []})
         try:
             async for sse in _stream_graph_events(graph, cmd, config, session_id):
                 yield sse
         except Exception as e:  # noqa: BLE001
             logger.error("resume_failed", error=str(e), thread_id=thread_id)
             yield _sse({"type": "error", "message": str(e)})
+
+    return StreamingResponse(
+        event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ==================== V1 Conductor 端点 ====================
+#
+# 新模型：1 主编排 (Conductor) + 4 能力 agent (T/I/V/D) + skill 市场。
+# 不动 V0 的 /chat /chat/team，平行迭代。详见 docs/v1-architecture.md。
+# ===========================================================
+
+class V1ConductRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    # 当上一轮返回 clarify_required，前端把答案塞进 clarify_answers 再请求一次
+    clarify_answers: Optional[dict[str, str]] = None
+
+
+@router.get("/v1/skills")
+async def v1_list_skills_endpoint():
+    """暴露 skill 市场的当前注册表，前端 skill 市集 UI 用。"""
+    return {
+        "count": len(v1_list_skills()),
+        "items": [s.model_dump() for s in v1_list_skills()],
+    }
+
+
+@router.post("/v1/conduct")
+async def v1_conduct_endpoint(req: V1ConductRequest):
+    """V1 主编排 SSE 入口。
+
+    流程（详见 conductor/dispatcher.py）：
+        start → intent_parsed → (clarify_required ⤴ 等下次调用)
+              → skill_selected → agent_start/chunk/agent_done* → deliverable → done
+    """
+    session_id = req.session_id or f"v1:{uuid.uuid4().hex[:12]}"
+
+    # 把 clarify_answers 拼进 user_text 让下游 parse_intent 一并消化（MVP 简化版）
+    text = req.message
+    if req.clarify_answers:
+        annot = " | ".join(f"{k}={v}" for k, v in req.clarify_answers.items())
+        text = f"{text}\n[澄清补充] {annot}"
+
+    async def event_stream():
+        async for ev in v1_conduct(text, session_id=session_id):
+            yield _sse(ev)
 
     return StreamingResponse(
         event_stream(), media_type="text/event-stream",
