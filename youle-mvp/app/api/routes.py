@@ -20,8 +20,10 @@ import asyncio
 import json
 import os
 import re
+import threading
 import time
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -42,6 +44,15 @@ GRAPH_TIMEOUT = 300
 AUTH_STATE: dict[str, str] = {}
 ARCHIVED_SESSIONS: dict[str, dict] = {}
 CHAT_HISTORY: dict[str, list[dict]] = {}
+
+# 每个 session 一把锁，避免并发写 manifest.json 互相覆盖
+_MANIFEST_LOCKS: dict[str, threading.Lock] = defaultdict(threading.Lock)
+_MANIFEST_LOCKS_GUARD = threading.Lock()
+
+
+def _manifest_lock_for(session_id: str) -> threading.Lock:
+    with _MANIFEST_LOCKS_GUARD:
+        return _MANIFEST_LOCKS[session_id]
 
 _OUTPUTS_DIR = Path(settings.ARTIFACT_DIR)
 _UPLOADS_DIR = Path(settings.UPLOAD_DIR)
@@ -268,36 +279,39 @@ def _save_artifact_to_outputs(session_id: str, step_idx: int, agent_id: str,
         parts.append(f"# {art_data.get('title', 'Artifact')}\n\nType: {atype}\n")
 
     content = "".join(parts)
-    path = out_dir / filename
-    c = 2
-    while path.exists():
-        filename = f"{art_id}-{c}.md"
+
+    # 文件落盘 + manifest 更新整体串行化，避免并发 SSE run 互相覆盖
+    with _manifest_lock_for(session_id):
         path = out_dir / filename
-        c += 1
-    path.write_text(content, encoding="utf-8")
+        c = 2
+        while path.exists():
+            filename = f"{art_id}-{c}.md"
+            path = out_dir / filename
+            c += 1
+        path.write_text(content, encoding="utf-8")
 
-    entry = {
-        "id": art_id, "step_idx": step_idx,
-        "agent_id": agent_id, "agent_name": agent_name,
-        "title": art_data.get("title", "Artifact"),
-        "summary": content[:120], "file": filename,
-        "size": len(content),
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "artifact_type": "markdown",
-    }
+        entry = {
+            "id": art_id, "step_idx": step_idx,
+            "agent_id": agent_id, "agent_name": agent_name,
+            "title": art_data.get("title", "Artifact"),
+            "summary": content[:120], "file": filename,
+            "size": len(content),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "artifact_type": "markdown",
+        }
 
-    mp = out_dir / "manifest.json"
-    manifest = {"session_id": session_id,
-                "created_at": datetime.now(timezone.utc).isoformat(), "artifacts": []}
-    if mp.exists():
-        try:
-            manifest = json.loads(mp.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            pass
-    manifest["artifacts"].append(entry)
-    tmp = mp.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, mp)
+        mp = out_dir / "manifest.json"
+        manifest = {"session_id": session_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(), "artifacts": []}
+        if mp.exists():
+            try:
+                manifest = json.loads(mp.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        manifest.setdefault("artifacts", []).append(entry)
+        tmp = mp.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, mp)
     return entry
 
 

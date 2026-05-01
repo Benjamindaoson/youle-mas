@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 
 import aiofiles
 
@@ -39,9 +40,14 @@ class ArtifactStore:
         return os.path.join(self.base_dir, safe)
 
     def _ensure_within_base(self, path: str) -> bool:
-        real = os.path.realpath(path)
-        base = os.path.realpath(self.base_dir)
-        return real.startswith(base + os.sep) or real == base
+        # 使用 Path.resolve() + is_relative_to，规避 startswith 的前缀混淆漏洞
+        # （如 /data/artifacts 与 /data/artifactsX 都以同一前缀开头）
+        try:
+            real = Path(path).resolve()
+            base = Path(self.base_dir).resolve()
+            return real == base or base in real.parents
+        except (OSError, ValueError):
+            return False
 
     async def save(self, artifact: Artifact, content: bytes | None = None) -> Artifact:
         d = self._session_dir(artifact.group_id)
@@ -114,9 +120,9 @@ class ArtifactStore:
         art = await self.get(artifact_id)
         if not art or not art.file_path:
             return None
-        path = os.path.realpath(art.file_path)
-        if not path.startswith(os.path.realpath(self.base_dir)):
+        if not self._ensure_within_base(art.file_path):
             return None
+        path = str(Path(art.file_path).resolve())
         if not os.path.isfile(path):
             return None
         return path

@@ -15,6 +15,7 @@ import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.config import Settings
+from app.errors import GatewayError
 from app.logging_config import logger
 
 
@@ -84,8 +85,20 @@ class ModelGateway:
             },
         )
         resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-        return json.loads(content)
+        try:
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+        except (json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
+            # 上游返回非预期结构：记录并抛出，让 text() 走模板兜底
+            preview = (resp.text or "")[:200]
+            logger.warning("deepseek_bad_envelope", error=str(e), preview=preview)
+            raise GatewayError(f"DeepSeek envelope malformed: {e}") from e
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            preview = (content or "")[:200]
+            logger.warning("deepseek_bad_json", error=str(e), preview=preview)
+            raise GatewayError(f"DeepSeek content not JSON: {e}") from e
 
     def _template_script(self, news_items: list) -> dict:
         body: list[str] = []

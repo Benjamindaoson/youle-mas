@@ -66,6 +66,7 @@ async def compose_news_video(
         "-shortest", output,
     ]
 
+    proc: asyncio.subprocess.Process | None = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -73,7 +74,13 @@ async def compose_news_video(
         if proc.returncode != 0:
             raise FFmpegError(f"FFmpeg failed: {stderr.decode()[-500:]}")
     except asyncio.TimeoutError:
-        proc.kill()
+        # kill 后必须 await，否则子进程残留为僵尸
+        if proc is not None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
         raise FFmpegError("FFmpeg timed out")
     finally:
         # 清理临时 concat 文件

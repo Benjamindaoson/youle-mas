@@ -19,8 +19,20 @@ async def normalize_audio(path: str, sample_rate: int = 44100) -> str:
     out = os.path.join(os.path.dirname(path), f"norm_{uuid.uuid4().hex}.wav")
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-y", "-i", path, "-ar", str(sample_rate), "-ac", "1", out,
-        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
     )
-    await asyncio.wait_for(proc.wait(), timeout=30)
-    # 转换失败时回退到原文件
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        logger.warning("audio_normalize_timeout", path=path)
+        return path
+
+    if proc.returncode != 0:
+        # 显式记录失败原因，再回退到原文件，避免静默吞错
+        tail = (stderr or b"").decode(errors="replace")[-300:]
+        logger.warning("audio_normalize_failed", returncode=proc.returncode, stderr=tail)
+        return path
+
     return out if os.path.isfile(out) else path
