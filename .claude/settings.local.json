@@ -4,7 +4,7 @@
       "Bash(where uv *)",
       "Bash(where ffmpeg *)",
       "Bash(C:/Users/Administrator/.local/bin/uv.exe --version)",
-      "Bash(E:/youle_mas/youle-mvp/.venv/Scripts/python.exe *)",
+      "Bash(E:/youle_mas/backend/.venv/Scripts/python.exe *)",
       "Bash(pnpm *)",
       "Bash(npm --version)",
       "Bash(npx --version)",
@@ -14,7 +14,20 @@
       "Bash(curl -s http://localhost:8001/health)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000)",
       "Bash(npm install *)",
-      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\" http://localhost:3000)"
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code}\" http://localhost:3000)",
+      "Bash(py *)",
+      "Bash(uv sync *)",
+      "Bash(uv run *)",
+      "Bash(curl -s --max-time 1 http://localhost:8001/health -o /tmp/health.txt)",
+      "Read(//tmp/**)",
+      "Bash(curl -s http://localhost:8001/agents)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:8001/chat -H \"Content-Type: application/json\" -d '{\"message\":\"帮我写一段公众号开头\",\"agent_id\":\"writer\"}')",
+      "Bash(curl -s -X POST http://localhost:8001/chat -H \"Content-Type: application/json\" --data-binary @.smoke/req_chat_writer.json -o .smoke/resp_chat_writer.txt)",
+      "Bash(curl -s -X POST http://localhost:8001/chat/team -H \"Content-Type: application/json\" --data-binary @.smoke/req_team_dispatch.json -o .smoke/resp_team_dispatch.txt)",
+      "Bash(timeout 60 curl -s -X POST http://localhost:8001/chat/team -H \"Content-Type: application/json\" --data-binary @.smoke/req_team_antiscam.json -o .smoke/resp_team_antiscam.txt)",
+      "Bash(curl -s http://localhost:8001/artifacts -o .smoke/resp_artifacts.json)",
+      "Bash(curl -s -X POST http://localhost:8001/chat -H \"Content-Type: application/json\" --data-binary @.smoke/req_chat_chief.json -o .smoke/resp_chat_chief.txt)"
     ]
   }
 }

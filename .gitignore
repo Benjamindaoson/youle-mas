@@ -1,0 +1,44 @@
+# ===== Python (backend) =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.so
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ===== Node / Next.js (frontend) =====
+node_modules/
+.next/
+.vercel/
+*.tsbuildinfo
+.pnpm-store/
+
+# ===== Env files =====
+.env
+.env.*.local
+.env.local
+
+# ===== Backend runtime data =====
+backend/data/artifacts/
+backend/data/checkpoints/
+backend/data/history/
+backend/data/uploads/*
+!backend/data/uploads/sample_news.xlsx
+backend/data/test/
+backend/server.log
+backend/*.db
+backend/*.sqlite
+
+# ===== Frontend runtime data =====
+frontend/server.log
+
+# ===== Editor / OS =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ===== Claude / Cursor agent worktrees =====
+.claude/worktrees/
