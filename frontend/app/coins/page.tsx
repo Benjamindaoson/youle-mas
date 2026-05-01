@@ -66,6 +66,12 @@ export default function CoinsPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-6 py-8">
+        {/* V0 不含计费，金币系统将随 V1 上线 */}
+        <div className="mb-6 rounded-xl border border-line bg-bg-sunken/60 px-5 py-3 text-xs text-ink-3 leading-relaxed">
+          <span className="font-medium text-ink-2">演示数据</span>
+          <span className="mx-2">·</span>
+          余额、套餐与消费记录均为示例。金币计费系统是 V1 计划，V0 阶段所有调用均免费。
+        </div>
         {/* 余额卡片 */}
         <div className="bg-gradient-to-br from-ink to-ink-2 rounded-2xl p-6 text-white mb-8">
           <div className="flex items-start justify-between mb-6">

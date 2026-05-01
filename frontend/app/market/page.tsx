@@ -66,6 +66,12 @@ export default function MarketPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8">
+        {/* V0 阶段 9 个 agent 全员可用，市集付费/雇佣流是 V1 计划 */}
+        <div className="mb-6 rounded-xl border border-line bg-bg-sunken/60 px-5 py-3 text-xs text-ink-3 leading-relaxed">
+          <span className="font-medium text-ink-2">演示展示</span>
+          <span className="mx-2">·</span>
+          雇佣 / 解雇 / 评分 / 套餐购买等流程是 V1 计划。V0 阶段 9 位 agent 全员默认可用，可直接到工作群里发起对话。
+        </div>
         {/* Hero 区 - 更大气的设计 */}
         <div className="relative bg-gradient-to-br from-ink via-ink-2 to-ink rounded-2xl p-8 mb-8 overflow-hidden">
           {/* 背景装饰 */}

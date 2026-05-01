@@ -55,6 +55,12 @@ export default function SettingsPage() {
       </header>
 
       <main className="max-w-4xl mx-auto px-6 py-8">
+        {/* V0 没有真正的账号系统，profile 仅本地保存 */}
+        <div className="mb-6 rounded-xl border border-line bg-bg-sunken/60 px-5 py-3 text-xs text-ink-3 leading-relaxed">
+          <span className="font-medium text-ink-2">本地保存</span>
+          <span className="mx-2">·</span>
+          V0 没有真实账号系统，个人资料 / 偏好仅保存在浏览器本地，不同设备不同步。SSO 与多端同步是 V1 计划。
+        </div>
         <div className="flex gap-8">
           {/* 左侧导航 */}
           <nav className="w-48 flex-shrink-0">

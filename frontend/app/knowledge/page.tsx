@@ -89,6 +89,12 @@ export default function KnowledgePage() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8">
+        {/* V0 不含知识库，资料上传与检索是 V1 计划 */}
+        <div className="mb-6 rounded-xl border border-line bg-bg-sunken/60 px-5 py-3 text-xs text-ink-3 leading-relaxed">
+          <span className="font-medium text-ink-2">演示数据</span>
+          <span className="mx-2">·</span>
+          知识库（文件上传 / 向量检索 / 个性化训练）是 V1 计划。V0 后端不持久化文件资料，agent 只在当前对话上下文中工作。
+        </div>
         {/* Hero 区 + 统计 */}
         <div className="bg-gradient-to-br from-bg-sunken to-bg-hover rounded-xl p-6 mb-8">
           <div className="flex items-center justify-between">
