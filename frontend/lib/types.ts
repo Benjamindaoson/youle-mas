@@ -1317,6 +1317,8 @@ export const WORK_GROUPS: WorkGroup[] = [
 
 // 资源导航 — 删去 V1 范围条目（market / knowledge），保留 V0 已实现部分
 export const RESOURCES: ResourceItem[] = [
+  { id: 'v1', icon: '✨', name: 'V1 主编排', href: '/v1' },
+  { id: 'skills', icon: '🧩', name: 'Skill 市场', href: '/skills' },
   { id: 'school', icon: '🎓', name: 'AI 学院', badge: 8, href: '/school' },
   { id: 'capabilities', icon: '⚡', name: '能力库', badge: 8, href: '/capabilities' },
   { id: 'artifacts', icon: '📝', name: '成果库', href: '/artifacts' },
