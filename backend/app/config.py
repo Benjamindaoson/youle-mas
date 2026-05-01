@@ -28,12 +28,19 @@ class Settings(BaseSettings):
     # ---- SiliconFlow（图片生成）----
     SILICONFLOW_API_KEY: str | None = None
     SILICONFLOW_API_BASE: str = "https://api.siliconflow.cn/v1"
-    IMAGE_MODEL: str = "black-forest-labs/FLUX.1-schnell"
+    # 默认走 FLUX.2-pro（画质优先）；降费可改 FLUX.1-schnell 并同步调整 IMAGE_SIZE
+    IMAGE_MODEL: str = "black-forest-labs/FLUX.2-pro"
+    # SiliconFlow `/images/generations` 使用 image_size（非 OpenAI 的 size）。
+    # FLUX.2 仅支持枚举：512x512、768x1024、1024x768、576x1024、1024x576
+    IMAGE_SIZE: str = "768x1024"
+    # FLUX.1-dev（1–30）/ FLUX.2-flex（1–50）可读取；其余模型忽略
+    IMAGE_INFERENCE_STEPS: int = 28
+    IMAGE_GENERATION_TIMEOUT: float = 180.0
 
     # ---- MiniMax（TTS 语音合成）----
     MINIMAX_API_KEY: str | None = None
     MINIMAX_GROUP_ID: str | None = None
-    MINIMAX_TTS_MODEL: str = "speech-01-turbo"
+    MINIMAX_TTS_MODEL: str = "speech-2.8-hd"
     MINIMAX_VOICE_ID: str = "male-qn-jingying"
 
     # ---- 路径与日志 ----
@@ -51,7 +58,7 @@ class Settings(BaseSettings):
     IMAGE_DOWNLOAD_TIMEOUT: int = 10   # 图片下载超时（秒）
     IMAGE_MAX_SIZE_MB: int = 10        # 单张图片大小上限
     FFMPEG_TIMEOUT: int = 120          # FFmpeg 合成超时（秒）
-    TTS_TIMEOUT: int = 30              # TTS 请求超时（秒）
+    TTS_TIMEOUT: int = 90              # HD TTS 可能较慢，放宽默认超时
 
     # ---- 便捷属性：判断各 API Key 是否真实可用 ----
 

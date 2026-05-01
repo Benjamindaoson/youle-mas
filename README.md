@@ -99,6 +99,14 @@ pnpm dev                      # 浏览器打开 http://localhost:3000
 
 切真实模型:`backend/.env` 设 `DEMO_MODE=false` + 填 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `SILICONFLOW_API_KEY` / `MINIMAX_API_KEY`。无 key 时全部走模板 fallback,链路不崩。
 
+### 媒体相关默认选型（可随时在 `.env` 覆盖）
+
+| 能力 | 当前默认 | 备注 |
+|---|---|---|
+| 图像 | SiliconFlow **`black-forest-labs/FLUX.2-pro`** + `IMAGE_SIZE`（见 `.env.example`） | **画质优先**。降费可改 `FLUX.1-schnell`，并改用该平台支持的更大 `IMAGE_SIZE` 枚举 |
+| 「视频」合成 | **无文生视频大模型**：上游 **配图（I）+ TTS（MiniMax）+ FFmpeg** | 体感取决于**图够不够强**与**配音模型**。真要 **T2V**（如可灵 / Runway / Sora 类等 API）需在 `capabilities/video` 或网关层单独接适配器 |
+| 配音 | **`speech-2.8-hd`** | 要低延迟可改 **`speech-2.8-turbo`** |
+
 ## V0 → V1 演进
 
 | 维度 | V0(在 `/legacy` 保留) | V1(默认 `/`) |
