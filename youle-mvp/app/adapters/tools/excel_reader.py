@@ -6,6 +6,11 @@ import os
 import pandas as pd
 from app.errors import ExcelReadError
 
+# 防 ZIP/Excel 炸弹：超过此大小直接拒绝（一份新闻列表远小于此）
+MAX_EXCEL_BYTES = 20 * 1024 * 1024
+# 防超大表格 OOM：限制最大行数（pandas 读完后再裁剪也能一定程度缓解）
+MAX_ROWS = 10000
+
 # 标准字段名 -> 可能出现的列名候选列表（中英文混合）
 COLUMN_MAP = {
     "title": ["标题", "新闻标题", "title", "Title"],
@@ -33,14 +38,22 @@ def read_excel(path: str) -> list[dict]:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"文件不存在: {path}")
 
+    size = os.path.getsize(path)
+    if size > MAX_EXCEL_BYTES:
+        raise ExcelReadError(
+            f"文件过大: {size} 字节 > 上限 {MAX_EXCEL_BYTES}（防 ZIP 炸弹）"
+        )
+
     ext = os.path.splitext(path)[1].lower()
     try:
         if ext == ".csv":
-            df = pd.read_csv(path)
+            df = pd.read_csv(path, nrows=MAX_ROWS)
         elif ext in (".xlsx", ".xls"):
-            df = pd.read_excel(path)
+            df = pd.read_excel(path, nrows=MAX_ROWS)
         else:
             raise ExcelReadError(f"不支持的文件格式: {ext}")
+    except ExcelReadError:
+        raise
     except Exception as e:
         raise ExcelReadError(f"读取文件失败: {e}") from e
 

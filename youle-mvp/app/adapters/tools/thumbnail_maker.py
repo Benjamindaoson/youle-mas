@@ -21,17 +21,26 @@ async def create_thumbnail(
 
     # 优先使用 FFmpeg 从视频第 3 秒截取一帧
     if video_path and shutil.which("ffmpeg"):
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 "ffmpeg", "-y", "-i", video_path, "-ss", "00:00:03",
                 "-vframes", "1", out,
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
             )
-            await asyncio.wait_for(proc.wait(), timeout=15)
-            if os.path.isfile(out):
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            if proc.returncode == 0 and os.path.isfile(out):
                 return out
+            tail = (stderr or b"").decode(errors="replace")[-300:]
+            logger.warning("thumbnail_ffmpeg_failed",
+                            returncode=proc.returncode, stderr=tail)
+        except asyncio.TimeoutError:
+            if proc is not None:
+                proc.kill()
+                await proc.wait()
+            logger.warning("thumbnail_ffmpeg_timeout", video_path=video_path)
         except Exception as e:
-            logger.warning("thumbnail_ffmpeg_failed", error=str(e))
+            logger.warning("thumbnail_ffmpeg_error", error=str(e))
 
     # 回退方案: 缩放备选图片
     if fallback_image and os.path.isfile(fallback_image):
