@@ -1,15 +1,20 @@
 """主编排节点（Orchestrator）— 只调度不干活。
 
 职责：
-  1. 首次进入：生成 DispatchPlan
-       - 若 state['approved'] 已为 True（V0 自动通过 / unit test）→ 直接派活
-       - 若 state['require_approval'] 为 True → 调 `interrupt()` 挂起 graph，
-         等前端调 POST /chat/team/resume/{thread_id} 注入 {"approved": True}
+  1. 首次进入：生成 DispatchPlan，**先落盘**（artifacts + dispatch_plan + phase）
+       - require_approval=True 且未 approved → goto "approval_gate"（在那里 interrupt）
+       - approved=True                     → goto "text_agent" 直跑
+       - 其他（向后兼容旧测试 approved=False/no-approval）→ goto END
   2. 后续进入：按 text → image → audio → video 顺序派活
   3. 全部完成：写 summary + 结束
 
 LangGraph 1.x 用法：节点返回 Command(update=..., goto=...)，不再依赖 builder
 里的 conditional_edges（已删除冗余路由）。
+
+为什么把 interrupt 放到独立的 approval_gate 节点而不是 orchestrator 里？
+  interrupt() 是 raise GraphInterrupt，会丢弃当前节点的整个 update。如果在
+  orchestrator 里直接 interrupt，dispatch_plan 不会被持久化。拆出 gate 节点后：
+  orchestrator 先 commit plan → gate 再 interrupt 等审批，state 历史完整。
 """
 from __future__ import annotations
 
@@ -23,6 +28,8 @@ from app.graph.streaming import emit
 from app.schemas.dispatch import DispatchPlan, DispatchStep
 from app.schemas.state import GroupState
 from app.utils import make_artifact
+
+APPROVAL_GATE = "approval_gate"
 
 
 def _make_plan(goal: str, group_id: str) -> tuple[DispatchPlan, object]:
