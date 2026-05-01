@@ -186,3 +186,120 @@ async def _parse_with_anthropic(user_text: str, history: list[dict]) -> Intent:
     data = json.loads(m.group(0))
     intent = Intent(**{**data, "raw_user_text": user_text})
     return intent
+
+
+# ============================ Phase 5+：一次过 intent + clarify ============================
+
+_INTENT_PLUS_CLARIFY_SYSTEM = """你是 V1 主编排前置层 — 既做意图解析又顺手把澄清问题拟好。
+
+输出严格 JSON:
+{
+  "intent": {
+    "vertical": "ecommerce | content | marketing | finance | other",
+    "deliverable_type": "image | video | doc | text | bundle",
+    "subject": "<对象/主题简明描述,10-30 字>",
+    "constraints": {"platform": "...", "tone": "...", "deadline": "..."},
+    "confidence": 0.0~1.0,
+    "missing_slots": ["vertical"|"deliverable_type"|"subject", ...]
+  },
+  "clarify_questions": [
+    {
+      "slot": "vertical | deliverable_type | subject",
+      "question": "<≤25 字 中文 自然反问>",
+      "options": ["<≤8 字>", ...],
+      "free_form": false
+    }
+  ]
+}
+
+规则:
+- intent 部分规则同前(subject 必须实指、confidence 三槽全 ≥0.85 / 缺一 0.5-0.7 / 缺二+ <0.5)。
+- 当 missing_slots 非空时,在 clarify_questions 里**对每个 missing_slot 给出 1 个**自然反问。
+  - vertical / deliverable_type → 必给 3-5 个 options,free_form=false
+  - subject → free_form=true,options=[]
+- 当 missing_slots 为空时,clarify_questions 必须是 [] (空数组)。
+- question 用第二人称、口语化、贴用户原话语境(不要"请告知您的需求")。
+- 只输出 JSON,不要额外解释。
+"""
+
+
+async def parse_intent_with_clarify(
+    user_text: str, history: list[dict] | None = None,
+) -> tuple[Intent, list[dict]]:
+    """一次 LLM 调用同时拿到 Intent 和 ClarifyQuestion 列表。
+
+    Returns:
+        (intent, clarify_questions_dicts)
+        clarify_questions 已经是 dict 形式（{slot,question,options,free_form}）,
+        调用方可直接用 ClarifyQuestion(**d) 实例化。
+
+    无 ANTHROPIC_API_KEY → 走启发式 intent + 模板 clarify(等同两次单独调用,
+    但只走一次同步逻辑)。
+
+    LLM 路径若 JSON 解析失败,降级为只用启发式 intent + 让 caller 后续单独
+    调 generate_questions(节省一次 LLM 但 clarify 走不到 LLM)。
+    """
+    if not settings.has_anthropic:
+        intent = _heuristic_parse(user_text)
+        return intent, []  # 让上层走 generate_questions 模板路径
+
+    try:
+        intent, clarify = await _parse_intent_with_clarify_llm(user_text, history or [])
+        return intent, clarify
+    except Exception as e:  # noqa: BLE001
+        logger.warning("intent_with_clarify_llm_failed_fallback", error=str(e))
+        try:
+            intent = await _parse_with_anthropic(user_text, history or [])
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("intent_anthropic_also_failed_using_heuristic", error=str(e2))
+            intent = _heuristic_parse(user_text)
+        return intent, []
+
+
+async def _parse_intent_with_clarify_llm(
+    user_text: str, history: list[dict],
+) -> tuple[Intent, list[dict]]:
+    import anthropic  # noqa: WPS433
+
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    messages = []
+    for h in history[-4:]:
+        if h.get("role") and h.get("content"):
+            messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": user_text})
+
+    resp = await client.messages.create(
+        model=settings.anthropic_model_conductor,
+        max_tokens=1024,
+        system=_INTENT_PLUS_CLARIFY_SYSTEM,
+        messages=messages,
+    )
+    text = resp.content[0].text if resp.content else ""
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        raise ValueError(f"no JSON in intent+clarify reply: {text[:200]!r}")
+    data = json.loads(m.group(0))
+
+    intent_raw = data.get("intent") or {}
+    if not isinstance(intent_raw, dict):
+        raise ValueError("intent field missing or wrong type")
+    intent = Intent(**{**intent_raw, "raw_user_text": user_text})
+
+    clarify_raw = data.get("clarify_questions") or []
+    if not isinstance(clarify_raw, list):
+        clarify_raw = []
+    # 只保留有效条目
+    clarify_clean: list[dict] = []
+    for q in clarify_raw:
+        if not isinstance(q, dict):
+            continue
+        slot = q.get("slot", "")
+        if slot not in ("vertical", "deliverable_type", "subject"):
+            continue
+        clarify_clean.append({
+            "slot": slot,
+            "question": str(q.get("question", ""))[:80],
+            "options": [str(o)[:20] for o in (q.get("options") or [])][:5],
+            "free_form": bool(q.get("free_form", False)),
+        })
+    return intent, clarify_clean[:3]

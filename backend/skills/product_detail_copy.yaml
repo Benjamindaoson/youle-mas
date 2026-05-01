@@ -1,0 +1,46 @@
+# 电商详情页文案 skill — T 单步,出 5 板块的详情页文字
+id: product_detail_copy
+name: 电商详情页文案
+version: "1.0"
+description: |
+  根据产品给出电商详情页的 5 个标准板块文案(主标题 / 副标题 / 卖点 / 使用场景 / FAQ)。
+  适合淘宝/京东/小红书电商上架文案。
+deliverable_type: text
+
+intent_keywords:
+  - 详情页
+  - 详情页文案
+  - 商品文案
+  - 电商文案
+  - 产品文案
+
+negative_keywords:
+  - 主图
+  - 标题
+  - 视频
+  - 海报
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.02
+
+steps:
+  - agent: T
+    task: 撰写电商详情页 5 板块文案
+    prompt_template: |
+      为以下产品写一份电商详情页文案,5 个板块:
+
+      产品: {subject}
+      行业: {vertical}
+      用户原话: {raw}
+
+      ## 主标题(≤25 字,带数字钩子或反差)
+      ## 副标题(≤40 字,补充功能/适用)
+      ## 3 个核心卖点(每个含 1 句利益点 + 1 句证据)
+      ## 2 个使用场景(具体到角色/时间/地点)
+      ## 5 条 FAQ(高频疑虑,简短答复)
+
+      合规:不用"最/第一/唯一",不夸大功效,不暗示医疗/医美效果。
+    outputs:
+      - text-asset (detail-copy)
