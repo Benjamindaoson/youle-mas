@@ -45,6 +45,11 @@ AUTH_STATE: dict[str, str] = {}
 ARCHIVED_SESSIONS: dict[str, dict] = {}
 CHAT_HISTORY: dict[str, list[dict]] = {}
 
+# 全局 dict 在 MVP 单 worker 下"够用"，但仍需锁住读改写以保持一致性。
+# 用 threading.Lock 是因为 SSE 生成器是 sync 上下文，asyncio.Lock 不通用。
+# 注：多 worker / 多进程部署需迁移到 Redis。
+_STATE_LOCK = threading.Lock()
+
 # 每个 session 一把锁，避免并发写 manifest.json 互相覆盖
 _MANIFEST_LOCKS: dict[str, threading.Lock] = defaultdict(threading.Lock)
 _MANIFEST_LOCKS_GUARD = threading.Lock()
@@ -82,7 +87,8 @@ def _history_path(sid: str) -> Path:
 
 
 def _save_history(sid: str) -> None:
-    turns = CHAT_HISTORY.get(sid, [])
+    with _STATE_LOCK:
+        turns = list(CHAT_HISTORY.get(sid, []))
     try:
         _history_path(sid).write_text(
             json.dumps(turns, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -95,7 +101,8 @@ def _load_all_history() -> None:
         try:
             turns = json.loads(f.read_text(encoding="utf-8"))
             if isinstance(turns, list):
-                CHAT_HISTORY[f.stem.replace("_", ":", 1)] = turns
+                with _STATE_LOCK:
+                    CHAT_HISTORY[f.stem.replace("_", ":", 1)] = turns
         except (OSError, json.JSONDecodeError):
             continue
 
@@ -159,9 +166,10 @@ async def chat(req: ChatRequest):
             yield _sse({"type": "chunk", "text": reply[i:i + 20]})
 
         if req.session_id:
-            turns = CHAT_HISTORY.setdefault(req.session_id, [])
-            turns.append({"role": "user", "content": req.message, "agent_id": agent_id})
-            turns.append({"role": "assistant", "content": reply, "agent_id": agent_id})
+            with _STATE_LOCK:
+                turns = CHAT_HISTORY.setdefault(req.session_id, [])
+                turns.append({"role": "user", "content": req.message, "agent_id": agent_id})
+                turns.append({"role": "assistant", "content": reply, "agent_id": agent_id})
             _save_history(req.session_id)
 
         yield _sse({"type": "done"})
@@ -236,9 +244,10 @@ async def chat_team(request: Request, req: TeamChatRequest):
                 yield _sse({"type": "chunk", "text": summary[i:i + 15], "agent_id": "chief"})
             yield _sse({"type": "agent_done", "agent_id": "chief"})
 
-            turns = CHAT_HISTORY.setdefault(session_id, [])
-            turns.append({"role": "user", "content": req.message, "agent_id": "team"})
-            turns.append({"role": "assistant", "content": summary, "agent_id": "chief"})
+            with _STATE_LOCK:
+                turns = CHAT_HISTORY.setdefault(session_id, [])
+                turns.append({"role": "user", "content": req.message, "agent_id": "team"})
+                turns.append({"role": "assistant", "content": summary, "agent_id": "chief"})
             _save_history(session_id)
 
         except asyncio.TimeoutError:
@@ -358,9 +367,18 @@ async def get_session_artifacts(session_id: str):
         return {"session_id": session_id, "created_at": "", "artifacts": []}
 
 
+def _is_safe_filename(name: str) -> bool:
+    # 只允许"裸文件名"：basename 等于自身且不含分隔符/相对路径片段
+    if not name or name in (".", ".."):
+        return False
+    if "/" in name or "\\" in name or "\x00" in name:
+        return False
+    return Path(name).name == name
+
+
 @router.get("/artifacts/{session_id}/{filename}")
 async def get_artifact_file(session_id: str, filename: str):
-    if "/" in filename or "\\" in filename or ".." in filename:
+    if not _is_safe_filename(filename):
         return JSONResponse(status_code=400, content={"error": "invalid_filename"})
     path = _OUTPUTS_DIR / _safe_dir(session_id) / filename
     if not path.exists() or not path.is_file():
@@ -374,7 +392,7 @@ async def get_artifact_file(session_id: str, filename: str):
 
 @router.get("/artifacts/{session_id}/{filename}/download")
 async def download_artifact_file(session_id: str, filename: str):
-    if "/" in filename or "\\" in filename or ".." in filename:
+    if not _is_safe_filename(filename):
         return JSONResponse(status_code=400, content={"error": "invalid_filename"})
     path = _OUTPUTS_DIR / _safe_dir(session_id) / filename
     if not path.exists() or not path.is_file():
@@ -404,14 +422,16 @@ async def upload_file(file: UploadFile = File(...), session_id: str = Form(defau
 
 @router.get("/auth/{session_id}")
 async def get_auth(session_id: str):
-    return {"session_id": session_id, "level": AUTH_STATE.get(session_id, "L0")}
+    with _STATE_LOCK:
+        return {"session_id": session_id, "level": AUTH_STATE.get(session_id, "L0")}
 
 
 @router.post("/auth/{session_id}")
 async def set_auth(session_id: str, body: AuthUpdate):
     if body.level not in ("L0", "L1", "L2"):
         return JSONResponse(status_code=400, content={"error": "invalid_level"})
-    AUTH_STATE[session_id] = body.level
+    with _STATE_LOCK:
+        AUTH_STATE[session_id] = body.level
     return {"session_id": session_id, "level": body.level}
 
 
@@ -419,31 +439,34 @@ async def set_auth(session_id: str, body: AuthUpdate):
 
 @router.get("/chat/archive/{session_id}")
 async def get_archive_status(session_id: str):
-    if session_id not in ARCHIVED_SESSIONS:
-        return {"session_id": session_id, "archived": False}
-    return {"session_id": session_id, "archived": True,
-            "snapshot": ARCHIVED_SESSIONS[session_id]}
+    with _STATE_LOCK:
+        if session_id not in ARCHIVED_SESSIONS:
+            return {"session_id": session_id, "archived": False}
+        return {"session_id": session_id, "archived": True,
+                "snapshot": ARCHIVED_SESSIONS[session_id]}
 
 
 @router.post("/chat/archive/{session_id}")
 async def archive_session(session_id: str):
-    if session_id in ARCHIVED_SESSIONS:
-        return {"session_id": session_id, "already_archived": True,
-                "archived": ARCHIVED_SESSIONS[session_id]}
-    turns = CHAT_HISTORY.get(session_id, [])
-    snapshot = {
-        "archived_at": datetime.now(timezone.utc).isoformat(),
-        "turn_count": len(turns), "artifact_count": 0,
-        "participants": list({t.get("agent_id", "") for t in turns if t.get("agent_id")}),
-    }
-    ARCHIVED_SESSIONS[session_id] = snapshot
+    with _STATE_LOCK:
+        if session_id in ARCHIVED_SESSIONS:
+            return {"session_id": session_id, "already_archived": True,
+                    "archived": ARCHIVED_SESSIONS[session_id]}
+        turns = CHAT_HISTORY.get(session_id, [])
+        snapshot = {
+            "archived_at": datetime.now(timezone.utc).isoformat(),
+            "turn_count": len(turns), "artifact_count": 0,
+            "participants": list({t.get("agent_id", "") for t in turns if t.get("agent_id")}),
+        }
+        ARCHIVED_SESSIONS[session_id] = snapshot
     return {"session_id": session_id, "already_archived": False, "archived": snapshot}
 
 
 @router.delete("/chat/archive/{session_id}")
 async def unarchive_session(session_id: str):
-    existed = session_id in ARCHIVED_SESSIONS
-    ARCHIVED_SESSIONS.pop(session_id, None)
+    with _STATE_LOCK:
+        existed = session_id in ARCHIVED_SESSIONS
+        ARCHIVED_SESSIONS.pop(session_id, None)
     return {"session_id": session_id, "was_archived": existed}
 
 
@@ -451,13 +474,15 @@ async def unarchive_session(session_id: str):
 
 @router.get("/history/{session_id}")
 async def get_history(session_id: str):
-    return {"session_id": session_id, "turns": CHAT_HISTORY.get(session_id, [])}
+    with _STATE_LOCK:
+        return {"session_id": session_id, "turns": list(CHAT_HISTORY.get(session_id, []))}
 
 
 @router.delete("/history/{session_id}")
 async def clear_history(session_id: str):
-    existed = session_id in CHAT_HISTORY
-    CHAT_HISTORY.pop(session_id, None)
+    with _STATE_LOCK:
+        existed = session_id in CHAT_HISTORY
+        CHAT_HISTORY.pop(session_id, None)
     try:
         p = _history_path(session_id)
         if p.exists():

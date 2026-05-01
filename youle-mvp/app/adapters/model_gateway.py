@@ -63,8 +63,15 @@ class ModelGateway:
     async def _call_deepseek(self, payload: dict) -> dict:
         client = await self._get_client()
         news_items = payload.get("news_items", [])
+
+        def _field(item: object, name: str) -> str:
+            # 统一兼容 dict / pydantic 对象，避免 getattr 在 dict 上静默返回空串
+            if isinstance(item, dict):
+                return str(item.get(name, "") or "")
+            return str(getattr(item, name, "") or "")
+
         news_text = "\n".join(
-            f"{i+1}. {getattr(n, 'title', '')}（涉案金额：{getattr(n, 'amount', '')}）- {getattr(n, 'summary', '')}"
+            f"{i+1}. {_field(n, 'title')}（涉案金额：{_field(n, 'amount')}）- {_field(n, 'summary')}"
             for i, n in enumerate(news_items)
         )
         prompt = (

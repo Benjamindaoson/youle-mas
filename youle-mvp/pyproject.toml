@@ -2,7 +2,7 @@
 name = "youle-mvp"
 version = "0.1.0"
 description = "「有了 / Youle」AI Agent V0 反诈短视频 demo"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 dependencies = [
     # === Web 框架 ===
     "fastapi==0.115.6",
@@ -46,6 +46,7 @@ dependencies = [
 dev = [
     "pytest==8.3.4",
     "pytest-asyncio==0.25.0",
+    "pytest-cov==6.0.0",
     "ruff==0.8.4",
     "mypy==1.13.0",
     "respx==0.21.1",
@@ -68,6 +69,34 @@ package = false
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = [
+    "E501",  # line-length 由 ruff 的 formatter 处理，不重复报
+    "B008",  # FastAPI 习惯用 Depends/File/Form 默认值
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # 测试里 assert False 是合法用法
+
+[tool.mypy]
+python_version = "3.12"
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+# 第三方库类型不全，先放宽 strict；后续可逐模块收紧
+check_untyped_defs = false
+disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["tests.*", "scripts.*"]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:websockets.*",
+]

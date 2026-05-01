@@ -18,13 +18,21 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理：启动时校验 → 建目录 → 编译 Graph → 就绪。"""
     setup_logging(settings.LOG_LEVEL)
 
-    # 非 DEMO 模式：缺 Key 直接拒绝启动
+    # 非 DEMO 模式：缺 Key 直接拒绝启动（不能用 assert，python -O 会剥离）
     if not settings.DEMO_MODE:
-        assert settings.ANTHROPIC_API_KEY, "缺少 ANTHROPIC_API_KEY"
-        assert settings.DEEPSEEK_API_KEY, "缺少 DEEPSEEK_API_KEY"
-        assert settings.SILICONFLOW_API_KEY, "缺少 SILICONFLOW_API_KEY"
-        assert settings.MINIMAX_API_KEY, "缺少 MINIMAX_API_KEY"
-        assert settings.ffmpeg_available, "FFmpeg 未安装"
+        required = [
+            ("ANTHROPIC_API_KEY", settings.ANTHROPIC_API_KEY),
+            ("DEEPSEEK_API_KEY", settings.DEEPSEEK_API_KEY),
+            ("SILICONFLOW_API_KEY", settings.SILICONFLOW_API_KEY),
+            ("MINIMAX_API_KEY", settings.MINIMAX_API_KEY),
+        ]
+        missing = [name for name, val in required if not val]
+        if missing:
+            raise RuntimeError(
+                f"非 DEMO 模式下缺少必需配置: {', '.join(missing)}"
+            )
+        if not settings.ffmpeg_available:
+            raise RuntimeError("非 DEMO 模式下要求 FFmpeg 可用")
     else:
         # DEMO 模式：缺 Key 只警告，走 fallback
         for name, check in [

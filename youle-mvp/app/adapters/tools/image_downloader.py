@@ -19,30 +19,44 @@ async def download_image(
     # 先做 SSRF 检查，防止请求内网地址
     if not check_ssrf(url):
         return None
+    max_bytes = max_size_mb * 1024 * 1024
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
+            # 流式获取：先校验响应头/大小再读 body，避免被超大响应耗尽内存
+            async with client.stream("GET", url) as resp:
+                resp.raise_for_status()
 
-            ct = resp.headers.get("content-type", "")
-            if not ct.startswith("image/"):
-                return None
-            if len(resp.content) > max_size_mb * 1024 * 1024:
-                return None
+                ct = resp.headers.get("content-type", "")
+                if not ct.startswith("image/"):
+                    return None
 
-            # 根据 Content-Type 推断扩展名
-            ext = "jpg"
-            if "png" in ct:
-                ext = "png"
-            elif "webp" in ct:
-                ext = "webp"
+                cl = resp.headers.get("content-length")
+                if cl and cl.isdigit() and int(cl) > max_bytes:
+                    return None
 
-            os.makedirs(save_dir, exist_ok=True)
-            fname = f"{uuid.uuid4().hex}.{ext}"
-            path = os.path.join(save_dir, fname)
-            async with aiofiles.open(path, "wb") as f:
-                await f.write(resp.content)
-            return path
+                # 根据 Content-Type 推断扩展名
+                ext = "jpg"
+                if "png" in ct:
+                    ext = "png"
+                elif "webp" in ct:
+                    ext = "webp"
+
+                os.makedirs(save_dir, exist_ok=True)
+                fname = f"{uuid.uuid4().hex}.{ext}"
+                path = os.path.join(save_dir, fname)
+
+                received = 0
+                async with aiofiles.open(path, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                        received += len(chunk)
+                        if received > max_bytes:
+                            try:
+                                os.remove(path)
+                            except OSError:
+                                pass
+                            return None
+                        await f.write(chunk)
+                return path
     except Exception as e:
         logger.warning("image_download_failed", url=url, error=str(e))
         return None
