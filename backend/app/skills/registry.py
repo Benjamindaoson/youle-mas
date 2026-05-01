@@ -43,6 +43,13 @@ class SkillSpec(BaseModel):
 
     intent_keywords: list[str] = Field(default_factory=list,
                                         description="关键词召回用")
+    negative_keywords: list[str] = Field(
+        default_factory=list,
+        description="用户话里命中任一词则从召回中剔除该 skill（减少误召回）")
+    negative_keywords: list[str] = Field(default_factory=list,
+                                          description="否决词：出现这些词时即使关键词命中也不召回")
+    min_match_score: int = Field(default=1,
+                                  description="最小命中关键词数；高于此值才召回")
     required_slots: list[str] = Field(default_factory=list)
     optional_slots: list[str] = Field(default_factory=list)
 
@@ -98,17 +105,28 @@ def get_skill(skill_id: str) -> SkillSpec | None:
 
 
 def match(message: str) -> SkillSpec | None:
-    """关键词召回 — V1 阶段会被 LLM-based intent router 替换。
+    """关键词召回（V1 会被 LLM-based intent router 替换）。
 
-    返回得分最高的 skill；同分时取注册顺序靠前的；
-    无关键词命中返回 None。
+    召回逻辑：
+        1. negative_keywords 命中 → 直接否决该 skill
+        2. intent_keywords 命中数 < spec.min_match_score → 跳过
+        3. 在剩余 skill 里取得分最高的；同分取注册顺序靠前
+        4. 都不命中 → None（让 routes 走通用 9 员工分支）
+
+    例：xiaohongshu_hook_title 配 negative_keywords=[方案,数据,...]
+    "做一份小红书冷启动方案" 含"方案"就被否决 → 不再误命中标题 skill。
     """
     text = (message or "").lower()
     best: tuple[int, SkillSpec] | None = None
     for spec in _REGISTRY.values():
-        score = sum(1 for kw in spec.intent_keywords if kw and kw.lower() in text)
-        if score == 0:
+        # 1. 否决词命中即跳过
+        if any(nk and nk.lower() in text for nk in (spec.negative_keywords or [])):
             continue
+        # 2. 关键词命中数 < 阈值即跳过
+        score = sum(1 for kw in spec.intent_keywords if kw and kw.lower() in text)
+        if score < (spec.min_match_score or 1):
+            continue
+        # 3. 取最高分
         if best is None or score > best[0]:
             best = (score, spec)
     return best[1] if best else None
