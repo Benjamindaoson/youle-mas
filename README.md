@@ -99,6 +99,16 @@ pnpm dev                      # 浏览器打开 http://localhost:3000
 
 切真实模型:`backend/.env` 设 `DEMO_MODE=false` + 填 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `SILICONFLOW_API_KEY` / `MINIMAX_API_KEY`。无 key 时全部走模板 fallback,链路不崩。
 
+### 文本 / 编排默认选型（`backend/.env`）
+
+| 调用方 | 变量 | 默认旗舰 |
+|---|---|---|
+| **主编排 Conductor**（意图 parse、澄清、skill 语义重排、dispatcher 选路） | `ANTHROPIC_MODEL`，可用 `ANTHROPIC_MODEL_CONDUCTOR` 单独覆盖 | **`claude-opus-4-7`** |
+| **V1 T 能力**（ReAct tool_use + **视觉理解**走同一套 Claude） | `ANTHROPIC_MODEL_CAPABILITY_TEXT`，可调 `ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT`（默认 8192） | 同上 |
+| **V0 单聊九大角色** | `ANTHROPIC_MODEL_ROLE_CHAT`，可调 `ANTHROPIC_MAX_OUTPUT_TOKENS_ROLE_CHAT`（默认 4096） | 同上 |
+| **LangGraph「文本脚本」网关**（反诈口播稿 JSON 等） | `DEEPSEEK_MODEL_PRO`（`DEEPSEEK_MODEL_FLASH` 预留快路径） | **`deepseek-reasoner`** · 若 JSON/`response_format` 不兼容再改回 **`deepseek-chat`** |
+| **D 文档能力** | （无独立 LLM） | 版式与结构由 **上游 T 的 markdown** + 本地 `python-pptx` 等生成 |
+
 ### 媒体相关默认选型（可随时在 `.env` 覆盖）
 
 | 能力 | 当前默认 | 备注 |

@@ -258,3 +258,58 @@ class ModelGateway:
 
     async def music(self, capability_id: str, payload: dict) -> None:
         return None
+
+    async def vision(self, capability_id: str, payload: dict) -> str | None:
+        """图像理解 — 用 Anthropic 视觉接口分析一张图片。
+
+        payload:
+            image_path: str    本地文件路径（必填）
+            instruction: str   想问的问题/分析视角（必填）
+            max_tokens: int    输出上限（默认 1024）
+
+        返回模型生成的中文分析文本；无 key 或失败返回 None。
+        失败由 caller 决定是否走 fallback（如 PIL 描色 / OCR placeholder）。
+        """
+        if not self.settings.has_anthropic:
+            return None
+        image_path = payload.get("image_path", "")
+        instruction = payload.get("instruction", "请分析这张图片，给出 3-5 条具体观察。")
+        max_tokens = int(payload.get("max_tokens", 1024))
+
+        try:
+            import os
+            import mimetypes
+            if not image_path or not os.path.isfile(image_path):
+                logger.warning("vision_image_missing", path=image_path)
+                return None
+            mime, _ = mimetypes.guess_type(image_path)
+            if not mime or not mime.startswith("image/"):
+                logger.warning("vision_not_an_image", path=image_path, mime=mime)
+                return None
+            with open(image_path, "rb") as f:
+                raw = f.read()
+            b64 = base64.b64encode(raw).decode("ascii")
+
+            import anthropic  # noqa: WPS433
+            client = anthropic.AsyncAnthropic(api_key=self.settings.ANTHROPIC_API_KEY)
+            t0 = time.monotonic()
+            resp = await client.messages.create(
+                model=self.settings.anthropic_model_capability_text,
+                max_tokens=max_tokens,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image",
+                         "source": {"type": "base64", "media_type": mime, "data": b64}},
+                        {"type": "text", "text": instruction},
+                    ],
+                }],
+            )
+            text = resp.content[0].text if resp.content else ""
+            logger.info("model_call", capability=capability_id, status="ok",
+                        latency_ms=int((time.monotonic() - t0) * 1000))
+            return text or None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("vision_call_failed",
+                           capability=capability_id, error=str(e))
+            return None

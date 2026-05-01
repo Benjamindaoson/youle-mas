@@ -126,8 +126,8 @@ async def _react_loop(
         # 最后一轮强制不再给 tools，逼模型给最终答案
         tools_arg = TOOL_DEFS if turn < MAX_TOOL_TURNS else None
         kwargs: dict[str, Any] = {
-            "model": settings.ANTHROPIC_MODEL,
-            "max_tokens": 2048,
+            "model": settings.anthropic_model_capability_text,
+            "max_tokens": settings.ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT,
             "messages": messages,
         }
         if tools_arg:

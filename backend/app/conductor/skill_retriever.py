@@ -113,7 +113,7 @@ async def _confirm_with_llm(
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     resp = await client.messages.create(
-        model=settings.ANTHROPIC_MODEL,
+        model=settings.anthropic_model_conductor,
         max_tokens=256,
         system=_CONFIRM_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],

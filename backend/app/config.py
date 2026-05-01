@@ -15,14 +15,23 @@ class Settings(BaseSettings):
     # True 时跳过 API Key 校验，所有模型调用走工程 fallback
     DEMO_MODE: bool = True
 
-    # ---- Anthropic（主编排模型）----
+    # ---- Anthropic（旗舰文本 + 推理；各「角色」留空表示与 ANTHROPIC_MODEL 相同）----
     ANTHROPIC_API_KEY: str | None = None
     ANTHROPIC_MODEL: str = "claude-opus-4-7"
+    # 主编排：意图 parse / clarify / skill 语义重排 / 分发器 LLM 选路
+    ANTHROPIC_MODEL_CONDUCTOR: str = ""
+    # V1 T 能力：ReAct + tool_use
+    ANTHROPIC_MODEL_CAPABILITY_TEXT: str = ""
+    # V0 九大角色单聊 stream
+    ANTHROPIC_MODEL_ROLE_CHAT: str = ""
 
-    # ---- DeepSeek（中文文本生成）----
+    ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT: int = 8192
+    ANTHROPIC_MAX_OUTPUT_TOKENS_ROLE_CHAT: int = 4096
+
+    # ---- DeepSeek（LangGraph/script 网关等 OpenAI-compat 路由）----
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL_PRO: str = "deepseek-chat"
+    DEEPSEEK_MODEL_PRO: str = "deepseek-reasoner"
     DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"
 
     # ---- SiliconFlow（图片生成）----
@@ -59,6 +68,23 @@ class Settings(BaseSettings):
     IMAGE_MAX_SIZE_MB: int = 10        # 单张图片大小上限
     FFMPEG_TIMEOUT: int = 120          # FFmpeg 合成超时（秒）
     TTS_TIMEOUT: int = 90              # HD TTS 可能较慢，放宽默认超时
+
+    # ---- 模型别名（留空则用 ANTHROPIC_MODEL）----
+
+    @property
+    def anthropic_model_conductor(self) -> str:
+        m = self.ANTHROPIC_MODEL_CONDUCTOR.strip()
+        return m if m else self.ANTHROPIC_MODEL
+
+    @property
+    def anthropic_model_capability_text(self) -> str:
+        m = self.ANTHROPIC_MODEL_CAPABILITY_TEXT.strip()
+        return m if m else self.ANTHROPIC_MODEL
+
+    @property
+    def anthropic_model_role_chat(self) -> str:
+        m = self.ANTHROPIC_MODEL_ROLE_CHAT.strip()
+        return m if m else self.ANTHROPIC_MODEL
 
     # ---- 便捷属性：判断各 API Key 是否真实可用 ----
 

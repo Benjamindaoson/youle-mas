@@ -173,7 +173,7 @@ async def _parse_with_anthropic(user_text: str, history: list[dict]) -> Intent:
     messages.append({"role": "user", "content": user_text})
 
     resp = await client.messages.create(
-        model=settings.ANTHROPIC_MODEL,
+        model=settings.anthropic_model_conductor,
         max_tokens=512,
         system=_INTENT_SYSTEM,
         messages=messages,
