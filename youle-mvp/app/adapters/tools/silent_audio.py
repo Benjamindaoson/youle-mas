@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 import uuid
 import wave
-import struct
 
 MAX_DURATION_SECONDS = 600
 # 每次写入的采样帧数，避免一次性分配过大内存
 CHUNK_FRAMES = 44100
+# 16-bit PCM 单声道：每帧 2 字节；纯零字节即静音
+_BYTES_PER_FRAME = 2
 
 
 async def create_silent(duration_seconds: float, save_dir: str, sample_rate: int = 44100) -> str:
@@ -21,12 +22,12 @@ async def create_silent(duration_seconds: float, save_dir: str, sample_rate: int
     path = os.path.join(save_dir, fname)
 
     total_frames = int(duration_seconds * sample_rate)
-    # 预构建一个完整 chunk 的零值缓冲区，循环复用
-    chunk = struct.pack(f"<{CHUNK_FRAMES}h", *([0] * CHUNK_FRAMES))
+    # 直接用 bytes(n) 生成全零，比 struct.pack(*[0]*n) 快得多且不分配 list
+    chunk = bytes(CHUNK_FRAMES * _BYTES_PER_FRAME)
 
     with wave.open(path, "w") as wf:
         wf.setnchannels(1)
-        wf.setsampwidth(2)
+        wf.setsampwidth(_BYTES_PER_FRAME)
         wf.setframerate(sample_rate)
         written = 0
         while written < total_frames:
@@ -35,9 +36,7 @@ async def create_silent(duration_seconds: float, save_dir: str, sample_rate: int
                 wf.writeframes(chunk)
                 written += CHUNK_FRAMES
             else:
-                # 尾部不足一个 chunk 时单独打包
-                small = struct.pack(f"<{remaining}h", *([0] * remaining))
-                wf.writeframes(small)
+                wf.writeframes(bytes(remaining * _BYTES_PER_FRAME))
                 written += remaining
 
     return path

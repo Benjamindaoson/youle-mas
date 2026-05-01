@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 
+from langgraph.graph import END
 from langgraph.types import Command
 
 from app.schemas.state import GroupState
@@ -57,12 +58,12 @@ async def orchestrator_node(state: GroupState) -> Command:
                 "agent_status": {"orchestrator": "planned"},
                 "events": [],
             },
-            goto="text_agent" if approved else "__end__",
+            goto="text_agent" if approved else END,
         )
 
     # 未审批则直接结束
     if not state.get("approved", False):
-        return Command(update={"next_agent": "END"}, goto="__end__")
+        return Command(update={"next_agent": "END"}, goto=END)
 
     # 按顺序检查各阶段产出，派给下一个 specialist
     if state.get("script") is None:
@@ -101,5 +102,5 @@ async def orchestrator_node(state: GroupState) -> Command:
             "artifacts": [summary_art],
             "agent_status": {"orchestrator": "done"},
         },
-        goto="__end__",
+        goto=END,
     )

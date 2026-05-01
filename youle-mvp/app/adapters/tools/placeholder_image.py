@@ -11,12 +11,21 @@ from PIL import Image, ImageDraw, ImageFont
 
 def _get_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """按优先级尝试加载中文字体，找不到则回退到默认字体。"""
-    for path in [
+    candidates = [
+        # Windows
         "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/msyh.ttf",
         "C:/Windows/Fonts/simhei.ttf",
+        # Linux: Noto / WenQuanYi / DejaVu
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        # macOS
         "/System/Library/Fonts/PingFang.ttc",
-    ]:
+        "/System/Library/Fonts/STHeiti Light.ttc",
+    ]
+    for path in candidates:
         if os.path.isfile(path):
             try:
                 return ImageFont.truetype(path, size)

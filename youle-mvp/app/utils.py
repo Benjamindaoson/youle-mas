@@ -9,8 +9,9 @@ from urllib.parse import urlparse
 
 from app.schemas.artifacts import Artifact, ArtifactType
 
-# 文件/目录名中不允许的字符（Windows + Unix 公共严格集）
-_UNSAFE_CHARS = re.compile(r"[^\w\-]")
+# 文件/目录名安全字符白名单（ASCII 字母数字 + 下划线 + 连字符）。
+# 注意：原先用 \w 会保留 Unicode 字母，在某些文件系统/工具链上仍会被拒。
+_UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9_\-]")
 
 # SSRF 黑名单主机（含 IPv6 回环）
 BLOCKED_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1", "::"})
