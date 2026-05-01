@@ -1,17 +1,126 @@
 """D agent — 办公文档能力（PDF / Excel / PPT / Word）。
 
-V0 完全没有这个 agent。V1 新增。
-内容/营销场景大量产出周报 PPT、复盘 Excel、品牌 PDF。
+V0 完全没有这个 capability。Phase 3 MVP：
+- PPT 生成（python-pptx）
+- DOCX 生成（python-docx）
+- Excel 读（pandas，已有依赖）
+- PDF 解析（pypdf；生成走 reportlab 留 V1.5）
 
-详见 docs/v1-architecture.md §4.5。
+任务路由：task.outputs 含 "ppt" / "pptx" → 出 PPT；"docx" → 出 Word；
+其余默认出 markdown 报告（兜底）。
 """
 from __future__ import annotations
 
+import os
+import re
+import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from app.conductor.intent import Intent
+from app.config import settings
+
+from app.logging_config import logger
 from app.skills.registry import SkillStep
+
+
+
+if TYPE_CHECKING:
+    from app.conductor.intent import Intent
+
+def _safe(sid: str) -> str:
+    s = re.sub(r"[^\w\-]", "_", sid or "")
+    return re.sub(r"_+", "_", s).strip("_") or "default"
+
+
+def _save_dir(session_id: str) -> str:
+    base = os.path.join(settings.ARTIFACT_DIR, _safe(session_id), "docs")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def _outputs_lower(task: SkillStep) -> str:
+    return " ".join(task.outputs).lower() + " " + (task.task or "").lower()
+
+
+def _slides_from_intent(intent: Intent, upstream: list[Any]) -> list[dict]:
+    """构造 PPT 的 slides 数据。优先取上游 T agent 的 markdown 内容当大纲。"""
+    title = intent.subject or "Youle 自动汇报"
+    subtitle = intent.raw_user_text or ""
+
+    body_text = ""
+    for entry in upstream or []:
+        for art in (entry.get("artifacts") or []):
+            t = art.get("content_inline")
+            if t:
+                body_text += t + "\n\n"
+
+    # 把 markdown 简单切成 slides：每个二级/无序列表当一页
+    slides: list[dict] = [{"title": title, "subtitle": subtitle, "body": []}]
+    cur: dict | None = None
+    for line in (body_text or f"# {title}\n\n- 关于 {title} 的初步思考\n").splitlines():
+        line = line.rstrip()
+        if not line:
+            continue
+        if line.startswith("# ") or line.startswith("## "):
+            cur = {"title": line.lstrip("# ").strip(), "subtitle": "", "body": []}
+            slides.append(cur)
+        elif line.startswith("- ") or line.startswith("* "):
+            (cur or slides[-1])["body"].append(line[2:].strip())
+        else:
+            (cur or slides[-1])["body"].append(line.strip())
+    if len(slides) == 1:
+        # 没有结构 → 把 body_text 整段塞到一页
+        slides.append({"title": title, "subtitle": "",
+                       "body": [body_text[:300] or "（占位内容）"]})
+    return slides
+
+
+def _make_pptx(path: str, slides: list[dict]) -> None:
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    prs = Presentation()
+    title_layout = prs.slide_layouts[0]
+    content_layout = prs.slide_layouts[1]
+
+    # 首页
+    head = slides[0]
+    s0 = prs.slides.add_slide(title_layout)
+    s0.shapes.title.text = head.get("title", "Untitled")
+    if s0.placeholders and len(s0.placeholders) > 1:
+        s0.placeholders[1].text = head.get("subtitle", "")
+
+    for slide in slides[1:]:
+        s = prs.slides.add_slide(content_layout)
+        s.shapes.title.text = slide.get("title", "")
+        body_holder = None
+        for ph in s.placeholders:
+            if ph.placeholder_format.idx == 1:
+                body_holder = ph
+                break
+        if body_holder is not None:
+            tf = body_holder.text_frame
+            tf.text = slide["body"][0] if slide.get("body") else ""
+            for line in slide.get("body", [])[1:]:
+                p = tf.add_paragraph()
+                p.text = line
+                p.font.size = Pt(18)
+
+    prs.save(path)
+
+
+def _make_docx(path: str, slides: list[dict]) -> None:
+    from docx import Document
+    doc = Document()
+    head = slides[0]
+    doc.add_heading(head.get("title", "Untitled"), level=0)
+    if head.get("subtitle"):
+        doc.add_paragraph(head["subtitle"])
+    for slide in slides[1:]:
+        doc.add_heading(slide.get("title", ""), level=1)
+        for line in slide.get("body", []):
+            doc.add_paragraph(line, style="List Bullet")
+    doc.save(path)
 
 
 async def run(
@@ -20,26 +129,50 @@ async def run(
     upstream: list[Any],
     session_id: str,
 ) -> AsyncIterator[dict]:
-    """[STUB] V1 实现策略：
+    save_dir = _save_dir(session_id)
+    out_kind = _outputs_lower(task)
+    slides = _slides_from_intent(intent, upstream)
 
-    依赖（pyproject.toml 待加）：
-    - python-pptx       PPT 生成
-    - python-docx       Word 生成
-    - openpyxl          Excel 读写（V0 已用，作为输入工具）
-    - pypdf             PDF 解析
-    - reportlab         PDF 生成（备选）
+    yield {"type": "chunk", "capability": "D",
+           "text": f"准备生成文档（{len(slides)} 页）..."}
 
-    skill 模板里 task.outputs 指明文件类型，本 agent 按类型走不同分支。
-    """
-    yield {
-        "type": "chunk",
-        "text": f"[D agent stub] task={task.task!r}",
-        "capability": "D",
-    }
+    try:
+        if "pptx" in out_kind or "ppt" in out_kind:
+            path = os.path.join(save_dir, f"deck_{uuid.uuid4().hex[:8]}.pptx")
+            _make_pptx(path, slides)
+            mime = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            artifact_type = "pptx"
+        elif "docx" in out_kind or "word" in out_kind:
+            path = os.path.join(save_dir, f"doc_{uuid.uuid4().hex[:8]}.docx")
+            _make_docx(path, slides)
+            mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            artifact_type = "docx"
+        else:
+            # 兜底：写 markdown
+            path = os.path.join(save_dir, f"report_{uuid.uuid4().hex[:8]}.md")
+            content = f"# {slides[0].get('title', '')}\n\n"
+            for slide in slides[1:]:
+                content += f"## {slide.get('title', '')}\n\n"
+                for line in slide.get("body", []):
+                    content += f"- {line}\n"
+                content += "\n"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            mime = "text/markdown"
+            artifact_type = "markdown"
+    except Exception as e:  # noqa: BLE001
+        logger.error("d_agent_doc_failed", error=str(e), out_kind=out_kind)
+        yield {"type": "error", "message": f"D agent 生成失败：{e}"}
+        return
+
     yield {
         "type": "artifact",
         "capability": "D",
-        "artifact_type": "doc",
-        "title": task.task or "D 产出",
-        "content_inline": "<doc placeholder>",
+        "artifact_type": artifact_type,
+        "title": task.task or "办公文档",
+        "file_path": path,
+        "mime_type": mime,
+        "session_id": session_id,
     }
+    yield {"type": "chunk", "capability": "D",
+           "text": f"完成：{os.path.basename(path)}"}

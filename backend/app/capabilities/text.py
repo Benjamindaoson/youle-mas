@@ -15,10 +15,14 @@ from typing import Any
 
 import yaml
 
+from typing import TYPE_CHECKING
+
 from app.config import settings
-from app.conductor.intent import Intent
 from app.skills.registry import SkillStep
 from app.logging_config import logger
+
+if TYPE_CHECKING:
+    from app.conductor.intent import Intent
 
 
 # 行业垂直 prompt 增量缓存

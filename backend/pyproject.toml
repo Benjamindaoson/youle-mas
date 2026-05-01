@@ -35,6 +35,12 @@ dependencies = [
     "rich==13.7.1",
     # === V1 skill 注册表（YAML 解析）===
     "pyyaml==6.0.2",
+
+    # === V1 D agent 办公文档生成 ===
+    "python-pptx==1.0.2",
+    "python-docx==1.1.2",
+    # pypdf 用于 PDF 解析（生成走 reportlab 留 V1.5）
+    "pypdf==5.1.0",
 ]
 
 [project.optional-dependencies]

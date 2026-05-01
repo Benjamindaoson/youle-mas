@@ -70,7 +70,14 @@ export interface ArtifactManifest {
 }
 
 export type TeamSSEEvent =
-  | { type: 'start'; mode: 'team'; session_id?: string | null }
+  | {
+      type: 'start';
+      mode: 'team' | 'team-resume';
+      session_id?: string | null;
+      thread_id?: string;
+      approved?: boolean;
+      snapshot_next?: string[];
+    }
   | {
       type: 'dispatch';
       plan: string;
@@ -105,6 +112,23 @@ export type TeamSSEEvent =
   | { type: 'chunk'; text: string; agent_id: string }
   | { type: 'agent_done'; agent_id: string }
   | { type: 'artifact_saved'; manifest: ArtifactManifest }
+  /** LangGraph interrupt：需 POST /chat/team/resume 继续 */
+  | {
+      type: 'approval_required';
+      thread_id: string;
+      interrupts?: unknown[];
+    }
+  /** 后端 graph streaming 自定义进度（emit） */
+  | {
+      type: 'progress';
+      agent_id?: string;
+      stage?: string;
+      detail?: string;
+      current?: number;
+      total?: number;
+      [key: string]: unknown;
+    }
+  | { type: 'rejected'; reason?: string }
   | {
       type: 'pass';
       agent_id: string;
@@ -570,6 +594,41 @@ async function realStreamChat(
   }
 }
 
+/** 解析 /chat/team 与 /chat/team/resume 的 SSE 帧 */
+async function readTeamSSEBody(
+  resp: Response,
+  onEvent: (event: TeamSSEEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!resp.body) return;
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop() ?? '';
+      for (const raw of parts) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const json = line.slice(5).trim();
+        if (!json) continue;
+        try {
+          onEvent(JSON.parse(json) as TeamSSEEvent);
+        } catch {
+          /* 非 JSON 帧忽略 */
+        }
+      }
+    }
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') return;
+    throw e;
+  }
+}
+
 /* ============================ 公开 API ============================ */
 
 export async function streamChat(
@@ -617,12 +676,13 @@ export async function streamTeamChat(
     sessionId?: string;
     mode?: 'dispatch' | 'discuss';
     members?: string[];
+    /** 仅反诈流水线等场景：触发后端 LangGraph interrupt（POST resume 接续） */
+    requireApproval?: boolean;
   },
   onEvent: (event: TeamSSEEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   if (USE_REAL_BACKEND) {
-    // 真实模式直接走原 fetch SSE（保持与原版一致行为，省略实现细节）
     let resp: Response;
     try {
       resp = await fetch(`${REAL_API_BASE}/chat/team`, {
@@ -633,6 +693,7 @@ export async function streamTeamChat(
           session_id: params.sessionId ?? null,
           mode: params.mode ?? 'dispatch',
           members: params.members ?? null,
+          require_approval: params.requireApproval ?? false,
         }),
         signal,
       });
@@ -646,28 +707,7 @@ export async function streamTeamChat(
       onEvent({ type: 'error', message: resp.statusText || '空响应' });
       return;
     }
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const parts = buf.split('\n\n');
-        buf = parts.pop() ?? '';
-        for (const raw of parts) {
-          const line = raw.trim();
-          if (!line.startsWith('data:')) continue;
-          const json = line.slice(5).trim();
-          if (!json) continue;
-          try { onEvent(JSON.parse(json) as TeamSSEEvent); } catch {}
-        }
-      }
-    } catch (e: unknown) {
-      if (e instanceof DOMException && e.name === 'AbortError') return;
-      throw e;
-    }
+    await readTeamSSEBody(resp, onEvent, signal);
     return;
   }
 
@@ -812,6 +852,49 @@ export async function streamTeamChat(
     const msg = e instanceof Error ? e.message : String(e);
     onEvent({ type: 'error', message: msg });
   }
+}
+
+/**
+ * LangGraph HITL resume：审批通过/驳回后接续同一 thread 的 SSE 流。
+ */
+export async function streamTeamResume(
+  params: { threadId: string; approved: boolean; reason?: string },
+  onEvent: (event: TeamSSEEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!USE_REAL_BACKEND) {
+    onEvent({
+      type: 'error',
+      message: 'Mock 模式无 resume，请在 .env.local 设置 NEXT_PUBLIC_AGENT_SERVER_URL。',
+    });
+    return;
+  }
+  const tid = encodeURIComponent(params.threadId);
+  let resp: Response;
+  try {
+    resp = await fetch(`${REAL_API_BASE}/chat/team/resume/${tid}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        approved: params.approved,
+        reason: params.reason ?? '',
+      }),
+      signal,
+    });
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') return;
+    const msg = e instanceof Error ? e.message : String(e);
+    onEvent({ type: 'error', message: `resume 请求失败：${msg}` });
+    return;
+  }
+  if (!resp.ok || !resp.body) {
+    onEvent({
+      type: 'error',
+      message: resp.statusText || `resume HTTP ${resp.status}`,
+    });
+    return;
+  }
+  await readTeamSSEBody(resp, onEvent, signal);
 }
 
 /* ============================ Artifacts ============================ */
@@ -995,4 +1078,173 @@ export async function setAuth(sessionId: string, level: AuthLevel): Promise<Auth
   }
   AUTH_BY_SESSION.set(sessionId, level);
   return level;
+}
+
+
+// ============================================================================
+// V1 — 主编排 + 4 能力 agent + skill 市场
+// 后端契约见 docs/v1-architecture.md。仅在 USE_REAL_BACKEND 时调用真后端。
+// ============================================================================
+
+export type V1CapabilityKey = 'T' | 'I' | 'V' | 'D';
+
+export interface V1SkillStep {
+  agent: V1CapabilityKey;
+  task: string;
+  prompt_template?: string;
+  inputs?: Record<string, unknown>;
+  outputs?: string[];
+}
+
+export interface V1Skill {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  deliverable_type: string;
+  intent_keywords: string[];
+  required_slots: string[];
+  optional_slots: string[];
+  steps: V1SkillStep[];
+  runner?: string | null;
+  expected_cost_usd: number;
+}
+
+export interface V1ClarifyQuestion {
+  slot: string;
+  question: string;
+  options?: string[];
+  free_form?: boolean;
+}
+
+export type V1ConductEvent =
+  | { type: 'start'; session_id: string }
+  | { type: 'intent_parsed'; intent: Record<string, unknown> }
+  | { type: 'clarify_required'; questions: V1ClarifyQuestion[] }
+  | { type: 'skill_selected'; skill_id: string; name: string; reason?: string }
+  | {
+      type: 'agent_start';
+      capability: V1CapabilityKey;
+      task?: string;
+      step_idx?: number;
+    }
+  | { type: 'chunk'; text: string; capability?: V1CapabilityKey }
+  | {
+      type: 'artifact';
+      capability?: V1CapabilityKey;
+      artifact_type?: string;
+      title?: string;
+      file_path?: string;
+      mime_type?: string;
+      content_inline?: string;
+      session_id?: string;
+    }
+  | { type: 'agent_done'; capability?: V1CapabilityKey; step_idx?: number }
+  | { type: 'deliverable'; skill_id: string; artifacts: unknown[] }
+  | { type: 'done' }
+  | { type: 'error'; message: string };
+
+/** 列出后端注册的所有 skill。Mock 模式下返回 demo 条目以便 UI 渲染。 */
+export async function listV1Skills(): Promise<V1Skill[]> {
+  if (USE_REAL_BACKEND) {
+    const resp = await fetch(`${REAL_API_BASE}/v1/skills`);
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return (data.items ?? []) as V1Skill[];
+  }
+  return [
+    {
+      id: 'xiaohongshu_hook_title',
+      name: '小红书爆款标题生成',
+      version: '1.0',
+      description: '根据主题生成 5 个小红书爆款风格的标题',
+      deliverable_type: 'text',
+      intent_keywords: ['小红书', '标题', '爆款'],
+      required_slots: ['subject'],
+      optional_slots: [],
+      steps: [
+        { agent: 'T', task: '生成 5 个小红书爆款标题', outputs: ['text-asset'] },
+      ],
+      expected_cost_usd: 0.01,
+    },
+    {
+      id: 'ecommerce_main_image',
+      name: '电商主图生成',
+      version: '1.0',
+      description: '生成符合电商平台规范的主图（白底 + 场景）',
+      deliverable_type: 'image',
+      intent_keywords: ['主图', '电商图', '产品图'],
+      required_slots: ['product_name', 'target_platform'],
+      optional_slots: ['reference_image', 'color_scheme'],
+      steps: [
+        { agent: 'T', task: '撰写图片生成 prompt', outputs: ['prompts'] },
+        { agent: 'I', task: '生成白底+场景主图', outputs: ['image-asset'] },
+        { agent: 'T', task: '写 alt 文案', outputs: ['text-asset'] },
+      ],
+      expected_cost_usd: 0.05,
+    },
+  ];
+}
+
+/** 调 V1 Conductor 的 SSE。clarifyAnswers 为反问回答（routes 层会拼回 message）。 */
+export async function streamV1Conduct(
+  params: {
+    message: string;
+    sessionId?: string;
+    clarifyAnswers?: Record<string, string>;
+  },
+  onEvent: (ev: V1ConductEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!USE_REAL_BACKEND) {
+    onEvent({
+      type: 'error',
+      message:
+        '当前为前端 mock 模式（未设 NEXT_PUBLIC_AGENT_SERVER_URL），无法调用 V1 Conductor。',
+    });
+    return;
+  }
+
+  const resp = await fetch(`${REAL_API_BASE}/v1/conduct`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: params.message,
+      session_id: params.sessionId,
+      clarify_answers: params.clarifyAnswers,
+    }),
+    signal,
+  });
+
+  if (!resp.ok || !resp.body) {
+    onEvent({
+      type: 'error',
+      message: `连不上 V1 Conductor（${REAL_API_BASE}/v1/conduct）：HTTP ${resp.status}`,
+    });
+    return;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const frames = buffer.split('\n\n');
+    buffer = frames.pop() ?? '';
+
+    for (const frame of frames) {
+      const line = frame.trim();
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const ev = JSON.parse(line.slice(6)) as V1ConductEvent;
+        onEvent(ev);
+      } catch {
+        // 忽略无法解析的帧
+      }
+    }
+  }
 }

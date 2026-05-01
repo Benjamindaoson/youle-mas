@@ -16,6 +16,16 @@ from app.skills.registry import (
     list_skills,
     get_skill,
     load_all,
+    match,
+    run_skill,
 )
 
-__all__ = ["SkillSpec", "SkillStep", "list_skills", "get_skill", "load_all"]
+__all__ = [
+    "SkillSpec",
+    "SkillStep",
+    "list_skills",
+    "get_skill",
+    "load_all",
+    "match",
+    "run_skill",
+]

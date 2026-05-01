@@ -15,11 +15,14 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from app.capabilities import doc, image, text, video
-from app.conductor.intent import Intent
 from app.skills.registry import SkillStep
+
+if TYPE_CHECKING:
+    # 避免与 conductor 循环导入：Intent 仅作类型提示
+    from app.conductor.intent import Intent
 
 
 _ROUTER = {
@@ -33,7 +36,7 @@ _ROUTER = {
 async def dispatch_to_capability(
     capability: str,
     task: SkillStep,
-    intent: Intent,
+    intent: "Intent",
     upstream: list[Any],
     session_id: str,
 ) -> AsyncIterator[dict]:

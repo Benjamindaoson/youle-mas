@@ -37,9 +37,14 @@ from app.config import settings
 from app.schemas.state import GroupState
 from app.logging_config import logger
 from app.agents.role_chat import stream_role_reply, role_meta
-from app.agents.dispatcher import plan_dispatch, is_antiscam_video_request
+from app.agents.dispatcher import plan_dispatch
 from app.conductor import conduct as v1_conduct
-from app.skills.registry import list_skills as v1_list_skills, load_all as v1_load_skills
+from app.skills.registry import (
+    list_skills as v1_list_skills,
+    load_all as v1_load_skills,
+    get_skill as v1_get_skill,
+    match as skill_match,
+)
 
 router = APIRouter()
 
@@ -208,10 +213,14 @@ async def chat(req: ChatRequest):
 
 # ==================== /chat/team — 群聊 SSE ====================
 #
-# 两条路径：
-#   A. 通用动态派活（默认）：dispatcher 选 1-3 个员工，逐个用 role_chat 流式回复，
-#      产出落到 artifacts，最后由 chief 汇总。
-#   B. 反诈视频流水线（关键词触发）：走原 LangGraph 5 节点。
+# 路由（Phase 0 改造，2026-05-01）：
+#   1. 先调 skill_match() 看用户消息是否命中 skill 注册表里的某个 workflow
+#      - 命中 anti_scam_video → 走 _stream_antiscam_pipeline（保留 V0 HITL 真流式）
+#      - 命中其他 runner-based skill → 走 _stream_skill_runner（通用包装器）
+#      - 命中声明式 DAG skill → 501（执行器 Phase 4 落地）
+#   2. 不命中 → 走 _stream_generic_team（动态派活到 9 员工）
+#
+# 与 V0 关键词分支的区别：路由由 skill 注册表数据驱动，添加新 skill 不需改本文件。
 # ===========================================================
 
 @router.post("/chat/team")
@@ -222,12 +231,66 @@ async def chat_team(request: Request, req: TeamChatRequest):
             "error": "session_archived",
             "message": f"群聊 '{session_id}' 已归档。"})
 
-    if is_antiscam_video_request(req.message):
-        graph = request.app.state.graph
-        cb = getattr(request.app.state, "trace_callback", None)
-        return _stream_antiscam_pipeline(graph, session_id, req, trace_callback=cb)
+    spec = skill_match(req.message)
+    if spec is not None:
+        logger.info("chat_team_skill_matched", skill_id=spec.id,
+                    session_id=session_id, has_runner=bool(spec.runner))
+        # 反诈视频走 V0 优化版（HITL + checkpoint resume + 真流式）
+        if spec.id == "anti_scam_video":
+            graph = request.app.state.graph
+            cb = getattr(request.app.state, "trace_callback", None)
+            return _stream_antiscam_pipeline(graph, session_id, req,
+                                              trace_callback=cb)
+        # 其他 skill（runner-based 或声明式 DAG）统一走通用包装器，
+        # registry.run_skill 内部根据 spec.runner 自动选执行路径
+        return _stream_skill_runner(spec, request, session_id, req)
 
     return _stream_generic_team(session_id, req)
+
+
+def _stream_skill_runner(spec, request: Request, session_id: str,
+                          req: TeamChatRequest) -> StreamingResponse:
+    """通用 runner-based skill 流式包装器。
+
+    把 skill runner yield 的事件 dict 转成 SSE 帧。session 历史落盘由 routes 层做。
+    """
+    from app.skills.registry import run_skill
+
+    graph = getattr(request.app.state, "graph", None)
+    ctx = {
+        "graph": graph,
+        "session_id": session_id,
+        "message": req.message,
+        "input_file_path": None,
+        "require_approval": req.require_approval,
+    }
+    summary_for_history = f"skill '{spec.id}' 已触发，详见上方进度。"
+
+    async def event_stream():
+        nonlocal summary_for_history
+        try:
+            async for ev in run_skill(spec, ctx):
+                # _history_hint 是 runner 给 routes 的内部信号，不发给前端
+                if ev.get("type") == "_history_hint":
+                    summary_for_history = ev.get("summary", summary_for_history)
+                    continue
+                yield _sse(ev)
+        except Exception as e:  # noqa: BLE001
+            logger.error("skill_runner_failed", skill_id=spec.id, error=str(e))
+            yield _sse({"type": "error", "message": str(e)})
+
+        # 历史落盘
+        with _STATE_LOCK:
+            turns = CHAT_HISTORY.setdefault(session_id, [])
+            turns.append({"role": "user", "content": req.message,
+                          "agent_id": "team"})
+            turns.append({"role": "assistant",
+                          "content": summary_for_history, "agent_id": "chief"})
+        _save_history(session_id)
+
+    return StreamingResponse(
+        event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 def _stream_generic_team(session_id: str, req: TeamChatRequest) -> StreamingResponse:
@@ -585,6 +648,35 @@ async def v1_list_skills_endpoint():
         "count": len(v1_list_skills()),
         "items": [s.model_dump() for s in v1_list_skills()],
     }
+
+
+@router.get("/skills")
+async def list_skills_endpoint():
+    """`/v1/skills` 的镜像 — 前端 lib/api.ts 走的命名。"""
+    return await v1_list_skills_endpoint()
+
+
+@router.get("/skills/{skill_id}")
+async def get_skill_endpoint(skill_id: str):
+    """单个 skill 详情。"""
+    spec = v1_get_skill(skill_id)
+    if spec is None:
+        return JSONResponse(status_code=404, content={
+            "error": "skill_not_found", "skill_id": skill_id})
+    return spec.model_dump()
+
+
+@router.post("/skills/match")
+async def match_skill_endpoint(body: dict):
+    """给定一段 message，回返 skill registry 召回到的 skill（调试用）。
+
+    body: {"message": "..."}
+    """
+    msg = (body or {}).get("message", "")
+    spec = skill_match(msg)
+    if spec is None:
+        return {"matched": False, "skill": None}
+    return {"matched": True, "skill": spec.model_dump()}
 
 
 @router.post("/v1/conduct")
