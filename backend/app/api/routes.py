@@ -233,16 +233,28 @@ async def chat_team(request: Request, req: TeamChatRequest):
 
     spec = skill_match(req.message)
     if spec is not None:
+        # LLM 二次确认（无 key 时直接放行）
+        from app.conductor.skill_retriever import confirm_match
+        should_execute, confirm_reason, confirm_conf = await confirm_match(
+            spec, req.message)
         logger.info("chat_team_skill_matched", skill_id=spec.id,
-                    session_id=session_id, has_runner=bool(spec.runner))
+                    session_id=session_id, has_runner=bool(spec.runner),
+                    confirmed=should_execute, conf=confirm_conf,
+                    reason=confirm_reason)
+
+        if not should_execute:
+            # LLM 说"这关键词命中是巧合，不该跑这 skill" → 退化通用派活
+            logger.info("chat_team_skill_rejected_by_llm",
+                        skill_id=spec.id, reason=confirm_reason)
+            return _stream_generic_team(session_id, req)
+
         # 反诈视频走 V0 优化版（HITL + checkpoint resume + 真流式）
         if spec.id == "anti_scam_video":
             graph = request.app.state.graph
             cb = getattr(request.app.state, "trace_callback", None)
             return _stream_antiscam_pipeline(graph, session_id, req,
                                               trace_callback=cb)
-        # 其他 skill（runner-based 或声明式 DAG）统一走通用包装器，
-        # registry.run_skill 内部根据 spec.runner 自动选执行路径
+        # 其他 skill（runner-based 或声明式 DAG）统一走通用包装器
         return _stream_skill_runner(spec, request, session_id, req)
 
     return _stream_generic_team(session_id, req)

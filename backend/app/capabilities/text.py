@@ -1,9 +1,15 @@
 """T agent — 文字/语言能力。
 
-Phase 2 实现：
+用户原话定义 agent1 = "文字 + 思考 + 推理 + 数据收集 + 分析"。
+
+Phase 2 → 2026-05-01 升级：
 - prompt 渲染（{subject} {vertical} {raw} 占位 + vertical_prompts 叠加）
-- 有 ANTHROPIC_API_KEY → Anthropic 流式
+- has_anthropic → **Anthropic ReAct tool_use 循环**：T 可自主决定调
+  web_search / read_url / read_excel（见 text_tools.py），实现"思考+查+写"
 - 无 key → 模板 fallback（针对常见 skill 类别给"够看"的占位输出）
+
+ReAct 安全护栏：MAX_TOOL_TURNS=4，避免 LLM 无限套娃；
+每次工具调用都流式 yield "tool_call" / "tool_result" 事件给前端做透明性。
 
 详见 docs/v1-architecture.md §4.2。
 """
@@ -64,6 +70,9 @@ def _render_prompt(task: SkillStep, intent: Intent, upstream: list[Any]) -> str:
     return "\n\n".join(parts)
 
 
+MAX_TOOL_TURNS = 4   # ReAct 套娃硬上限，避免 LLM 无限循环
+
+
 async def run(
     task: SkillStep,
     intent: Intent,
@@ -75,11 +84,12 @@ async def run(
     full_text = ""
     if settings.has_anthropic:
         try:
-            async for chunk in _stream_anthropic(prompt):
-                full_text += chunk
-                yield {"type": "chunk", "text": chunk, "capability": "T"}
+            async for ev in _react_loop(prompt, task=task):
+                if ev["type"] == "chunk":
+                    full_text += ev["text"]
+                yield ev
         except Exception as e:  # noqa: BLE001
-            logger.warning("text_capability_anthropic_failed_fallback", error=str(e))
+            logger.warning("text_capability_react_failed_fallback", error=str(e))
             full_text = _template_fallback(task, intent)
             yield {"type": "chunk", "text": full_text, "capability": "T"}
     else:
@@ -96,16 +106,94 @@ async def run(
     }
 
 
-async def _stream_anthropic(prompt: str) -> AsyncIterator[str]:
+async def _react_loop(
+    prompt: str,
+    *,
+    task: SkillStep,
+) -> AsyncIterator[dict]:
+    """Anthropic tool_use ReAct 循环。
+
+    一轮 = 模型可能选 1) 直接回答；2) 调一个或多个工具。
+    工具结果回喂模型，下一轮模型再决定。最多 MAX_TOOL_TURNS 轮硬中断。
+    """
     import anthropic  # noqa: WPS433
+    from app.capabilities.text_tools import TOOL_DEFS, call_tool
+
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-    async with client.messages.stream(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=2048,
-        messages=[{"role": "user", "content": prompt}],
-    ) as stream:
-        async for text in stream.text_stream:
-            yield text
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+
+    for turn in range(MAX_TOOL_TURNS + 1):
+        # 最后一轮强制不再给 tools，逼模型给最终答案
+        tools_arg = TOOL_DEFS if turn < MAX_TOOL_TURNS else None
+        kwargs: dict[str, Any] = {
+            "model": settings.ANTHROPIC_MODEL,
+            "max_tokens": 2048,
+            "messages": messages,
+        }
+        if tools_arg:
+            kwargs["tools"] = tools_arg
+
+        # 这一轮 stream（用 stream API 拿增量）
+        text_blocks: list[str] = []
+        tool_uses: list[dict[str, Any]] = []
+        async with client.messages.stream(**kwargs) as stream:
+            async for text in stream.text_stream:
+                text_blocks.append(text)
+                yield {"type": "chunk", "text": text, "capability": "T"}
+            final = await stream.get_final_message()
+
+        # 收集本轮 tool_use blocks
+        for block in final.content:
+            if block.type == "tool_use":
+                tool_uses.append({
+                    "id": block.id,
+                    "name": block.name,
+                    "input": dict(block.input or {}),
+                })
+
+        # 没有 tool_use → 模型已经给最终答案，结束
+        if not tool_uses:
+            return
+
+        # 把 assistant 的 content 原样追加（包括 tool_use blocks）
+        messages.append({"role": "assistant", "content": final.content})
+
+        # 调每个工具，把结果作为 user 的 tool_result 回写
+        tool_results: list[dict[str, Any]] = []
+        for tu in tool_uses:
+            yield {
+                "type": "tool_call",
+                "capability": "T",
+                "tool": tu["name"],
+                "input": tu["input"],
+                "turn": turn + 1,
+            }
+            result = await call_tool(tu["name"], tu["input"])
+            yield {
+                "type": "tool_result",
+                "capability": "T",
+                "tool": tu["name"],
+                "result": result,
+                "turn": turn + 1,
+            }
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tu["id"],
+                "content": _serialize_tool_result(result),
+            })
+        messages.append({"role": "user", "content": tool_results})
+
+    # 上限了还没收敛 → 警告但不 raise
+    logger.warning("text_react_max_turns_reached", task=task.task)
+
+
+def _serialize_tool_result(result: Any) -> str:
+    """tool_result content 必须是字符串（Anthropic 规定）。"""
+    import json
+    try:
+        return json.dumps(result, ensure_ascii=False)[:8000]
+    except (TypeError, ValueError):
+        return str(result)[:8000]
 
 
 def _template_fallback(task: SkillStep, intent: Intent) -> str:

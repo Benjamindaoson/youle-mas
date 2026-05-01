@@ -16,6 +16,15 @@ intent_keywords:
   - 商品图
   - 详情页
 
+# 否决词：避免"详情页文案"误中（用户其实要写文字）
+negative_keywords:
+  - 文案
+  - 标题
+  - 脚本
+  - 视频
+  - 监测
+  - 数据分析
+
 required_slots:
   - product_name
   - target_platform
