@@ -35,6 +35,8 @@ from pydantic import BaseModel
 from app.config import settings
 from app.schemas.state import GroupState
 from app.logging_config import logger
+from app.agents.role_chat import stream_role_reply, role_meta
+from app.agents.dispatcher import plan_dispatch, is_antiscam_video_request
 
 router = APIRouter()
 
@@ -154,17 +156,30 @@ async def list_agents():
 @router.post("/chat")
 async def chat(req: ChatRequest):
     agent_id = req.agent_id
-    agent_name = AGENT_DISPLAY.get(agent_id, agent_id)
+    meta = role_meta(agent_id)
+    agent_name = meta["name"]
+    if req.session_id:
+        with _STATE_LOCK:
+            history = list(CHAT_HISTORY.get(req.session_id, []))
+    else:
+        history = []
 
-    def event_stream():
+    async def event_stream():
         yield _sse({"type": "start", "agent_id": agent_id, "agent_name": agent_name})
         yield _sse({"type": "progress", "stage": "thinking",
                      "detail": f"{agent_name} 正在处理"})
 
-        reply = f"收到你的消息：「{req.message[:100]}」。我是{agent_name}，正在为你服务。（V0 demo 模式，接入真实模型后将返回 AI 回复）"
-        for i in range(0, len(reply), 20):
-            yield _sse({"type": "chunk", "text": reply[i:i + 20]})
+        collected: list[str] = []
+        try:
+            async for chunk in stream_role_reply(agent_id, req.message, history):
+                collected.append(chunk)
+                yield _sse({"type": "chunk", "text": chunk})
+        except Exception as e:  # noqa: BLE001
+            logger.error("chat_stream_failed", error=str(e), agent=agent_id)
+            yield _sse({"type": "error", "message": str(e)})
+            return
 
+        reply = "".join(collected)
         if req.session_id:
             with _STATE_LOCK:
                 turns = CHAT_HISTORY.setdefault(req.session_id, [])
@@ -179,18 +194,165 @@ async def chat(req: ChatRequest):
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-# ==================== /chat/team — 群聊 SSE (LangGraph) ====================
+# ==================== /chat/team — 群聊 SSE ====================
+#
+# 两条路径：
+#   A. 通用动态派活（默认）：dispatcher 选 1-3 个员工，逐个用 role_chat 流式回复，
+#      产出落到 artifacts，最后由 chief 汇总。
+#   B. 反诈视频流水线（关键词触发）：走原 LangGraph 5 节点。
+# ===========================================================
 
 @router.post("/chat/team")
 async def chat_team(request: Request, req: TeamChatRequest):
-    graph = request.app.state.graph
-    session_id = req.session_id or f"group:antiscam-{uuid.uuid4().hex[:12]}"
-
+    session_id = req.session_id or f"group:adhoc-{uuid.uuid4().hex[:12]}"
     if session_id in ARCHIVED_SESSIONS:
         return JSONResponse(status_code=409, content={
             "error": "session_archived",
             "message": f"群聊 '{session_id}' 已归档。"})
 
+    if is_antiscam_video_request(req.message):
+        graph = request.app.state.graph
+        return _stream_antiscam_pipeline(graph, session_id, req)
+
+    return _stream_generic_team(session_id, req)
+
+
+def _stream_generic_team(session_id: str, req: TeamChatRequest) -> StreamingResponse:
+    """通用动态派活 — 不再写死反诈视频流水线。"""
+
+    async def event_stream():
+        yield _sse({"type": "start", "mode": "team", "session_id": session_id})
+        try:
+            mode = (req.mode or "dispatch").lower()
+            if mode == "discuss":
+                async for ev in _run_discuss(session_id, req):
+                    yield ev
+            else:
+                async for ev in _run_dispatch(session_id, req):
+                    yield ev
+        except Exception as e:  # noqa: BLE001
+            logger.error("team_chat_generic_failed", error=str(e))
+            yield _sse({"type": "error", "message": str(e)})
+        yield _sse({"type": "done"})
+
+    return StreamingResponse(
+        event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+async def _run_dispatch(session_id: str, req: TeamChatRequest):
+    """dispatch 模式：chief 拆活 → 员工逐个执行 → 出 artifact → chief 汇总。"""
+    plan = plan_dispatch(req.message, req.members)
+    yield _sse({"type": "dispatch", "plan": plan.plan,
+                "steps": [s.to_dict() for s in plan.steps]})
+
+    if not plan.steps:
+        yield _sse({"type": "agent_start", "agent_id": "chief",
+                    "agent_name": "理", "phase": "direct"})
+        async for c in stream_role_reply("chief", req.message, []):
+            yield _sse({"type": "chunk", "text": c, "agent_id": "chief"})
+        yield _sse({"type": "agent_done", "agent_id": "chief"})
+
+        with _STATE_LOCK:
+            turns = CHAT_HISTORY.setdefault(session_id, [])
+            turns.append({"role": "user", "content": req.message, "agent_id": "team"})
+            turns.append({"role": "assistant", "content": plan.plan, "agent_id": "chief"})
+        _save_history(session_id)
+        return
+
+    total = len(plan.steps)
+    artifact_count = 0
+    for idx, step in enumerate(plan.steps, start=1):
+        meta = role_meta(step.to)
+        fe_name = meta["name"]
+
+        yield _sse({"type": "handoff", "from": "chief", "to": step.to,
+                    "task": step.task, "step_idx": idx, "step_total": total})
+        yield _sse({"type": "agent_start", "agent_id": step.to,
+                    "agent_name": fe_name, "phase": "execute"})
+
+        collected: list[str] = []
+        prompt = f"{step.task}\n\n（用户原始消息：{req.message}）"
+        async for c in stream_role_reply(step.to, prompt, []):
+            collected.append(c)
+            yield _sse({"type": "chunk", "text": c, "agent_id": step.to})
+
+        yield _sse({"type": "agent_done", "agent_id": step.to})
+
+        full = "".join(collected).strip()
+        if full:
+            manifest = _save_text_artifact(
+                session_id=session_id, step_idx=idx,
+                agent_id=step.to, agent_name=fe_name,
+                title=f"{fe_name}的产出 #{idx}",
+                body=full, summary_hint=step.task,
+            )
+            if manifest:
+                artifact_count += 1
+                yield _sse({"type": "artifact_saved", "manifest": manifest})
+
+    yield _sse({"type": "agent_start", "agent_id": "chief",
+                "agent_name": "理", "phase": "summary"})
+    names = " / ".join(role_meta(s.to)["name"] for s in plan.steps)
+    summary_msg = (
+        f"刚才{names}各自跑完了，共产出 {artifact_count} 个归档（左侧成果库可查）。"
+        "要我把这些拼成一份总结发给你，还是直接进入下一步？"
+    )
+    for i in range(0, len(summary_msg), 14):
+        yield _sse({"type": "chunk", "text": summary_msg[i:i + 14], "agent_id": "chief"})
+    yield _sse({"type": "agent_done", "agent_id": "chief"})
+
+    with _STATE_LOCK:
+        turns = CHAT_HISTORY.setdefault(session_id, [])
+        turns.append({"role": "user", "content": req.message, "agent_id": "team"})
+        turns.append({"role": "assistant", "content": summary_msg, "agent_id": "chief"})
+    _save_history(session_id)
+
+
+async def _run_discuss(session_id: str, req: TeamChatRequest):
+    """discuss 模式：chief 抛议题 → 2-3 个员工各发一段 → chief 收束。"""
+    plan = plan_dispatch(req.message, req.members)
+    participants = [s.to for s in plan.steps[:3]] or ["analyst", "planner", "writer"]
+
+    snippet = req.message[:24] + ("…" if len(req.message) > 24 else "")
+    yield _sse({
+        "type": "discussion",
+        "flow_type": "discuss",
+        "topic": f"围绕「{snippet}」的快速讨论",
+        "question": "各位先按自己专业角度说一段，最后我来收拢。",
+        "scope_in": ["关键判断", "分歧点"],
+        "scope_out": ["执行细节"],
+        "deadline_turns": 2,
+        "participants": participants,
+    })
+
+    for aid in participants:
+        meta = role_meta(aid)
+        yield _sse({"type": "agent_start", "agent_id": aid,
+                    "agent_name": meta["name"], "phase": "discuss"})
+        async for c in stream_role_reply(aid, req.message, []):
+            yield _sse({"type": "chunk", "text": c, "agent_id": aid})
+        yield _sse({"type": "agent_done", "agent_id": aid})
+
+    yield _sse({"type": "agent_start", "agent_id": "chief",
+                "agent_name": "理", "phase": "discuss-summary"})
+    names = " / ".join(role_meta(p)["name"] for p in participants)
+    closing = (
+        f"我把{names}的发言收一下：核心分歧不大，建议先做一个最小动作验证假设。需要我安排吗？"
+    )
+    for i in range(0, len(closing), 14):
+        yield _sse({"type": "chunk", "text": closing[i:i + 14], "agent_id": "chief"})
+    yield _sse({"type": "agent_done", "agent_id": "chief"})
+
+    with _STATE_LOCK:
+        turns = CHAT_HISTORY.setdefault(session_id, [])
+        turns.append({"role": "user", "content": req.message, "agent_id": "team"})
+        turns.append({"role": "assistant", "content": closing, "agent_id": "chief"})
+    _save_history(session_id)
+
+
+def _stream_antiscam_pipeline(graph, session_id: str, req: TeamChatRequest) -> StreamingResponse:
+    """关键词命中"反诈视频"时走原 LangGraph 5 节点流水线。"""
     group_id = _safe_dir(session_id)
     config = {"configurable": {"thread_id": f"group_{group_id}"}, "recursion_limit": 50}
     initial_state: GroupState = {
@@ -239,7 +401,7 @@ async def chat_team(request: Request, req: TeamChatRequest):
             yield _sse({"type": "agent_start", "agent_id": "chief",
                         "agent_name": "理", "phase": "summary"})
             n = len(result.get("artifacts", []))
-            summary = f"任务完成！共产出 {n} 个交付物。可在成果库查看和下载。"
+            summary = f"反诈短视频流水线完成！共产出 {n} 个交付物。可在成果库查看和下载。"
             for i in range(0, len(summary), 15):
                 yield _sse({"type": "chunk", "text": summary[i:i + 15], "agent_id": "chief"})
             yield _sse({"type": "agent_done", "agent_id": "chief"})
@@ -252,14 +414,66 @@ async def chat_team(request: Request, req: TeamChatRequest):
 
         except asyncio.TimeoutError:
             yield _sse({"type": "error", "message": "执行超时（5分钟）"})
-        except Exception as e:
-            logger.error("team_chat_failed", error=str(e))
+        except Exception as e:  # noqa: BLE001
+            logger.error("antiscam_pipeline_failed", error=str(e))
             yield _sse({"type": "error", "message": str(e)})
         yield _sse({"type": "done"})
 
     return StreamingResponse(
         event_stream(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def _save_text_artifact(session_id: str, step_idx: int, agent_id: str,
+                        agent_name: str, title: str, body: str,
+                        summary_hint: str) -> dict | None:
+    """把员工的纯文本产出落到 outputs/{sid}/00X-{agent}.md，并 append 到 manifest.json。"""
+    safe_sid = _safe_dir(session_id)
+    out_dir = _OUTPUTS_DIR / safe_sid
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_agent = re.sub(r"[^\w]", "_", agent_id)
+    art_id = f"{step_idx:03d}-{safe_agent}"
+    filename = f"{art_id}.md"
+    content = f"# {title}\n\n_任务_：{summary_hint}\n\n---\n\n{body}\n"
+
+    with _manifest_lock_for(session_id):
+        path = out_dir / filename
+        c = 2
+        while path.exists():
+            filename = f"{art_id}-{c}.md"
+            path = out_dir / filename
+            c += 1
+        try:
+            path.write_text(content, encoding="utf-8")
+        except OSError as e:
+            logger.warning("artifact_write_failed", path=str(path), error=str(e))
+            return None
+
+        summary_text = body[:120].replace("\n", " ").strip()
+        entry = {
+            "id": art_id, "step_idx": step_idx,
+            "agent_id": agent_id, "agent_name": agent_name,
+            "title": title, "summary": summary_text or summary_hint[:120],
+            "file": filename, "size": len(content),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "artifact_type": "markdown",
+        }
+
+        mp = out_dir / "manifest.json"
+        manifest = {"session_id": session_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(), "artifacts": []}
+        if mp.exists():
+            try:
+                manifest = json.loads(mp.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        manifest.setdefault("artifacts", []).append(entry)
+        tmp = mp.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(tmp, mp)
+
+    return entry
 
 
 def _save_artifact_to_outputs(session_id: str, step_idx: int, agent_id: str,
