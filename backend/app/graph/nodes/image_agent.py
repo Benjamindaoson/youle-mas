@@ -5,24 +5,33 @@ Fallback 链路：
   2. 新闻 URL 的 og:image → 抽取后下载
   3. AI 图片模型 → 生成警示风格图
   4. Pillow 占位图 → 永远成功
+
+LangGraph 1.x 集成：
+  - 每张图完成时通过 emit('progress') 推送 N/total 进度，前端进度条可用
+  - 入口/出口 emit agent_start / agent_done
+
+设计取舍：当前用 asyncio.gather 在节点内部并发；未来若要让 LangGraph
+Send 接管每张图（独立 retry / checkpoint），可拆出 image_one 子节点。
 """
 from __future__ import annotations
 
 import asyncio
 import os
 
+from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
-from app.schemas.state import GroupState
-from app.config import settings
 from app.adapters.model_gateway import ModelGateway
+from app.adapters.storage.artifact_store import ArtifactStore
 from app.adapters.tools.image_downloader import download_image
+from app.adapters.tools.image_processor import resize_image
 from app.adapters.tools.og_image_extractor import extract_og_image
 from app.adapters.tools.placeholder_image import create_placeholder
-from app.adapters.tools.image_processor import resize_image
-from app.adapters.storage.artifact_store import ArtifactStore
-from app.utils import make_artifact
+from app.config import settings
+from app.graph.streaming import emit
 from app.logging_config import logger
+from app.schemas.state import GroupState
+from app.utils import make_artifact
 
 
 async def _get_image_for_news(news: dict, save_dir: str, gateway: ModelGateway) -> str:
@@ -67,13 +76,18 @@ async def image_node(state: GroupState) -> Command:
     os.makedirs(img_dir, exist_ok=True)
     store = ArtifactStore(settings.ARTIFACT_DIR)
 
+    emit("agent_start", agent_id="image_agent", agent_name="图", phase="execute")
+
     async with ModelGateway(settings) as gateway:
         try:
             excel_rows = state.get("excel_rows", [])
             if not excel_rows:
                 excel_rows = [{"title": "warning", "idx": 1}]
 
-            # 并发获取所有图片，单张异常不影响其他
+            total = len(excel_rows)
+            emit("progress", agent_id="image_agent",
+                 stage="fetching", detail=f"准备 {total} 张配图")
+
             tasks = [_get_image_for_news(n, img_dir, gateway) for n in excel_rows]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -94,23 +108,34 @@ async def image_node(state: GroupState) -> Command:
                     data={"news_idx": i + 1})
                 await store.save_file(art, path)
                 artifacts.append(art)
+                emit("progress", agent_id="image_agent",
+                     stage="generated", detail=f"{i+1}/{total}", current=i + 1, total=total)
 
             logger.info("image_agent", action="done", count=len(image_paths))
+            emit("agent_done", agent_id="image_agent")
             return Command(
                 update={
                     "image_paths": image_paths,
                     "artifacts": artifacts,
                     "agent_status": {"image_agent": "done"},
+                    "messages": [AIMessage(
+                        content=f"配图已就绪：{len(image_paths)} 张",
+                        name="image_agent")],
                 },
                 goto="orchestrator",
             )
         except Exception as e:
             logger.error("image_agent_failed", error=str(e))
+            emit("error", agent_id="image_agent", message=str(e))
+            emit("agent_done", agent_id="image_agent")
             return Command(
                 update={
                     "image_paths": [],
                     "errors": [{"agent": "image_agent", "error": str(e)}],
                     "agent_status": {"image_agent": "error"},
+                    "messages": [AIMessage(
+                        content=f"image_agent 走 fallback：{e}",
+                        name="image_agent")],
                 },
                 goto="orchestrator",
             )

@@ -30,6 +30,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from langgraph.types import Command as LGCommand
 from pydantic import BaseModel
 
 from app.config import settings
@@ -124,6 +125,15 @@ class TeamChatRequest(BaseModel):
     session_id: Optional[str] = None
     mode: str = "dispatch"
     members: Optional[list[str]] = None
+    # HITL: 仅在反诈视频流水线生效；True 时 orchestrator 会触发 interrupt 等待
+    # 前端 POST /chat/team/resume/{thread_id} 注入 {"approved": true|false}
+    require_approval: bool = False
+
+
+class ResumeRequest(BaseModel):
+    """POST /chat/team/resume/{thread_id} 的 body。"""
+    approved: bool = True
+    reason: Optional[str] = None
 
 
 class AuthUpdate(BaseModel):
@@ -351,73 +361,165 @@ async def _run_discuss(session_id: str, req: TeamChatRequest):
     _save_history(session_id)
 
 
-def _stream_antiscam_pipeline(graph, session_id: str, req: TeamChatRequest) -> StreamingResponse:
-    """关键词命中"反诈视频"时走原 LangGraph 5 节点流水线。"""
+_AGENT_FE_MAP = {
+    "text_agent":  ("writer",      "创", 1, 4),
+    "image_agent": ("analyst",     "图", 2, 4),
+    "audio_agent": ("distributor", "声", 3, 4),
+    "video_agent": ("coder",       "剪", 4, 4),
+    "orchestrator": ("chief",      "理", 0, 4),
+}
+
+
+def _fe_for(node_id: str) -> tuple[str, str, int, int]:
+    """把 graph 内部 node_id 映射到前端 agent_id / 名 / step_idx / step_total。"""
+    return _AGENT_FE_MAP.get(node_id, (node_id, node_id, 0, 4))
+
+
+def _antiscam_initial_state(session_id: str, message: str, *, approved: bool,
+                             require_approval: bool) -> tuple[GroupState, dict]:
+    """构造 LangGraph 初始 state + config（thread_id 用于 checkpoint resume）。"""
     group_id = _safe_dir(session_id)
     config = {"configurable": {"thread_id": f"group_{group_id}"}, "recursion_limit": 50}
     initial_state: GroupState = {
         "group_id": group_id, "thread_id": f"group_{group_id}",
-        "user_goal": req.message, "phase": "planning",
-        "current_step_index": 0, "approved": True,
+        "user_goal": message, "phase": "planning",
+        "current_step_index": 0,
+        "approved": approved,
+        "require_approval": require_approval,
         "image_paths": [], "messages": [], "artifacts": [],
         "events": [], "agent_status": {}, "cost_usd": 0.0,
-        "errors": [], "retry_count": {},
+        "errors": [],
     }
+    return initial_state, config
 
-    agent_map = [
-        ("text_agent", "writer", "创", "write script", 1, 4),
-        ("image_agent", "analyst", "图", "prepare images", 2, 4),
-        ("audio_agent", "distributor", "声", "generate audio", 3, 4),
-        ("video_agent", "coder", "剪", "compose video", 4, 4),
-    ]
+
+async def _stream_graph_events(graph, stream_input, config, session_id: str):
+    """把 LangGraph astream(updates+custom) 事件适配成前端 SSE 事件流。
+
+    - mode='custom'  → 节点用 emit() 推的 {"kind":..., ...} 直接转 SSE
+    - mode='updates' → 拿到节点 update dict 后：
+        * artifacts 增量 → _save_artifact_to_outputs 落盘 → artifact_saved
+        * __interrupt__  → 停止流并返回 approval_required
+    - 末尾若 graph 跑完，根据 final state 推 chief summary + done
+    """
+    summary_seen = False
+    artifact_seen: set[str] = set()
+
+    async for mode, ev in graph.astream(
+        stream_input,
+        config,
+        stream_mode=["updates", "custom"],
+    ):
+        if mode == "custom":
+            kind = ev.pop("kind", "progress")
+            yield _sse({"type": kind, **ev})
+            continue
+
+        if mode != "updates":
+            continue
+
+        for node_name, update in ev.items():
+            # interrupt 事件：node_name == "__interrupt__"
+            if node_name == "__interrupt__":
+                interrupts = update if isinstance(update, list) else [update]
+                payloads = []
+                for it in interrupts:
+                    val = getattr(it, "value", it)
+                    payloads.append(val)
+                yield _sse({
+                    "type": "approval_required",
+                    "thread_id": config["configurable"]["thread_id"],
+                    "interrupts": payloads,
+                })
+                # 后续不再有事件，让外层结束
+                return
+
+            update = update or {}
+            # artifacts 增量 → 落盘到 outputs/{sid}/manifest.json
+            for art in update.get("artifacts", []) or []:
+                ad = art.model_dump() if hasattr(art, "model_dump") else art
+                art_id = ad.get("id")
+                if art_id and art_id in artifact_seen:
+                    continue
+                if art_id:
+                    artifact_seen.add(art_id)
+                fe_id, fe_name, step_idx, _ = _fe_for(ad.get("by_agent", node_name))
+                m = _save_artifact_to_outputs(session_id, step_idx, fe_id, fe_name, ad)
+                if m:
+                    yield _sse({"type": "artifact_saved", "manifest": m})
+
+            # orchestrator 进入 done 阶段时记录 summary（用于历史落盘）
+            if node_name == "orchestrator" and update.get("phase") == "done":
+                summary_seen = True
+
+    # 正常跑完
+    if summary_seen:
+        yield _sse({"type": "done"})
+    else:
+        # 走到这里说明 graph 没 hit interrupt 也没 phase='done'（一般是 unapproved 路径）
+        yield _sse({"type": "done"})
+
+
+def _stream_antiscam_pipeline(graph, session_id: str, req: TeamChatRequest) -> StreamingResponse:
+    """关键词命中"反诈视频"时走 LangGraph 流水线（真流式 / 支持 HITL interrupt）。"""
+    initial_state, config = _antiscam_initial_state(
+        session_id, req.message,
+        approved=not req.require_approval,
+        require_approval=req.require_approval,
+    )
 
     async def event_stream():
-        yield _sse({"type": "start", "mode": "team", "session_id": session_id})
+        yield _sse({"type": "start", "mode": "team", "session_id": session_id,
+                    "thread_id": config["configurable"]["thread_id"]})
         try:
-            result = await asyncio.wait_for(
-                graph.ainvoke(initial_state, config), timeout=GRAPH_TIMEOUT)
-
-            plan = result.get("dispatch_plan")
-            if plan:
-                pd = plan.model_dump() if hasattr(plan, "model_dump") else plan
-                steps = [{"to": s["agent"], "task": s["task"]} for s in pd.get("steps", [])]
-                yield _sse({"type": "dispatch", "plan": pd.get("goal", ""), "steps": steps})
-
-            for our_id, fe_id, fe_name, task, si, st in agent_map:
-                if our_id not in result.get("agent_status", {}):
-                    continue
-                yield _sse({"type": "handoff", "from": "chief", "to": fe_id,
-                            "task": task, "step_idx": si, "step_total": st})
-                yield _sse({"type": "agent_start", "agent_id": fe_id,
-                            "agent_name": fe_name, "phase": "execute"})
-                for art in result.get("artifacts", []):
-                    ad = art.model_dump() if hasattr(art, "model_dump") else art
-                    if ad.get("by_agent") == our_id:
-                        m = _save_artifact_to_outputs(session_id, si, fe_id, fe_name, ad)
-                        if m:
-                            yield _sse({"type": "artifact_saved", "manifest": m})
-                yield _sse({"type": "agent_done", "agent_id": fe_id})
-
-            yield _sse({"type": "agent_start", "agent_id": "chief",
-                        "agent_name": "理", "phase": "summary"})
-            n = len(result.get("artifacts", []))
-            summary = f"反诈短视频流水线完成！共产出 {n} 个交付物。可在成果库查看和下载。"
-            for i in range(0, len(summary), 15):
-                yield _sse({"type": "chunk", "text": summary[i:i + 15], "agent_id": "chief"})
-            yield _sse({"type": "agent_done", "agent_id": "chief"})
-
-            with _STATE_LOCK:
-                turns = CHAT_HISTORY.setdefault(session_id, [])
-                turns.append({"role": "user", "content": req.message, "agent_id": "team"})
-                turns.append({"role": "assistant", "content": summary, "agent_id": "chief"})
-            _save_history(session_id)
-
+            async for sse in _stream_graph_events(
+                    graph, initial_state, config, session_id):
+                yield sse
         except asyncio.TimeoutError:
-            yield _sse({"type": "error", "message": "执行超时（5分钟）"})
+            yield _sse({"type": "error", "message": "执行超时"})
         except Exception as e:  # noqa: BLE001
             logger.error("antiscam_pipeline_failed", error=str(e))
             yield _sse({"type": "error", "message": str(e)})
-        yield _sse({"type": "done"})
+
+        # 历史落盘：把最近一轮简短记录到 chat history
+        with _STATE_LOCK:
+            turns = CHAT_HISTORY.setdefault(session_id, [])
+            turns.append({"role": "user", "content": req.message, "agent_id": "team"})
+            turns.append({"role": "assistant",
+                          "content": "反诈视频流水线已触发，详见上方进度。",
+                          "agent_id": "chief"})
+        _save_history(session_id)
+
+    return StreamingResponse(
+        event_stream(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@router.post("/chat/team/resume/{thread_id}")
+async def resume_team(thread_id: str, body: ResumeRequest, request: Request):
+    """HITL 恢复点：把用户审批结果通过 Command(resume=...) 注入挂起的 graph。
+
+    返回新的 SSE 事件流（接着上次 interrupt 处继续跑，直到再次 interrupt 或完成）。
+    """
+    graph = request.app.state.graph
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
+    # 反推 session_id（thread_id 形如 group_{safe_sid}）
+    session_id = thread_id[len("group_"):] if thread_id.startswith("group_") else thread_id
+
+    cmd = LGCommand(resume={
+        "approved": body.approved,
+        "reason": body.reason or "",
+    })
+
+    async def event_stream():
+        yield _sse({"type": "start", "mode": "team-resume",
+                    "thread_id": thread_id, "approved": body.approved})
+        try:
+            async for sse in _stream_graph_events(graph, cmd, config, session_id):
+                yield sse
+        except Exception as e:  # noqa: BLE001
+            logger.error("resume_failed", error=str(e), thread_id=thread_id)
+            yield _sse({"type": "error", "message": str(e)})
 
     return StreamingResponse(
         event_stream(), media_type="text/event-stream",
