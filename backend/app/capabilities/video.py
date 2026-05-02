@@ -174,7 +174,17 @@ async def run(
            "text": f"准备 {duration}s 视频：脚本 {len(full_text)} 字"}
 
     # 1. 音频部分（V0 audio_agent 合并进来）
+    if not settings.has_minimax:
+        yield {
+            "type": "warning", "capability": "V",
+            "message": "未配置 MINIMAX_API_KEY，将用静音占位 TTS",
+        }
     voice_path = await _produce_voice(full_text or "占位音频", audio, duration)
+    if not os.path.isfile(settings.DEFAULT_BGM_PATH):
+        yield {
+            "type": "warning", "capability": "V",
+            "message": f"未找到 BGM 文件 ({settings.DEFAULT_BGM_PATH})，将用静音占位",
+        }
     bgm_path = await _produce_bgm(audio, duration)
     voice_path = await normalize_audio(voice_path)
     bgm_path = await normalize_audio(bgm_path)
@@ -208,6 +218,17 @@ async def run(
     images = _extract_image_paths(upstream)
     video_out = os.path.join(save, "video.mp4")
     has_mp4 = False
+    compose_error: str | None = None
+    if not images:
+        yield {
+            "type": "warning", "capability": "V",
+            "message": "上游没有图片素材，无法合成 mp4，将用占位图代替",
+        }
+    elif not settings.ffmpeg_available:
+        yield {
+            "type": "warning", "capability": "V",
+            "message": "本机找不到 ffmpeg，无法合成 mp4，将用第一张图代替",
+        }
     if images and settings.ffmpeg_available:
         try:
             per_img = max(1.0, duration / max(len(images), 1))
@@ -219,8 +240,10 @@ async def run(
             has_mp4 = os.path.isfile(video_out)
         except FFmpegError as e:
             logger.warning("v_agent_compose_failed_fallback", error=str(e))
+            compose_error = str(e)
         except Exception as e:  # noqa: BLE001
             logger.warning("v_agent_compose_unexpected", error=str(e))
+            compose_error = str(e)
 
     if has_mp4:
         yield {
@@ -230,6 +253,11 @@ async def run(
             "session_id": session_id,
         }
     else:
+        if compose_error:
+            yield {
+                "type": "warning", "capability": "V",
+                "message": f"ffmpeg 合成失败（{compose_error}），降级为图片产出",
+            }
         # fallback：标注 video-fallback，告知前端没有真 mp4
         yield {
             "type": "artifact", "capability": "V",

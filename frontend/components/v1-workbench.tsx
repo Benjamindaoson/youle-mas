@@ -70,6 +70,7 @@ type WorkbenchCard =
       done: boolean;
     }
   | { kind: 'deliverable'; skill_id: string; count: number }
+  | { kind: 'warning'; message: string; capability?: V1CapabilityKey }
   | { kind: 'error'; message: string }
   | { kind: 'done' };
 
@@ -189,6 +190,13 @@ export function V1Workbench() {
             kind: 'deliverable',
             skill_id: ev.skill_id,
             count: Array.isArray(ev.artifacts) ? ev.artifacts.length : 0,
+          });
+          break;
+        case 'warning':
+          next.push({
+            kind: 'warning',
+            message: ev.message,
+            capability: ev.capability,
           });
           break;
         case 'error':
@@ -549,6 +557,16 @@ function CardView({ card }: { card: WorkbenchCard }) {
             skill <code className="font-mono">{card.skill_id}</code> 共产出{' '}
             {card.count} 个 artifact
           </p>
+        </SystemCard>
+      );
+    case 'warning':
+      return (
+        <SystemCard
+          icon={<AlertCircle className="w-3.5 h-3.5" />}
+          title={card.capability ? `${card.capability} 降级提示` : '降级提示'}
+          tone="warning"
+        >
+          <p className="text-xs">{card.message}</p>
         </SystemCard>
       );
     case 'error':
