@@ -76,10 +76,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan, title="Youle Backend", version="0.1.0")
 
-# CORS：允许所有 localhost 端口（前端 3000 / 其他调试端口）
+# CORS：允许本机任意端口（localhost / 127.0.0.1 / IPv6 回环）；两者与 Host 不等价，缺一则常见「Failed to fetch」
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^http://localhost:\d+$",
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|\[::1\]):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

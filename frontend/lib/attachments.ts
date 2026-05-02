@@ -10,6 +10,11 @@
  * 工具链看。上传走 multipart，后端只负责存盘 + 返回绝对路径。
  */
 
+import {
+  USE_REAL_AGENT_BACKEND as USE_REAL_BACKEND,
+  getAgentApiBase,
+} from './agent-server-base';
+
 export type Attachment =
   | {
       kind: 'file';
@@ -31,11 +36,6 @@ export type Attachment =
       content: string;
     };
 
-const API_BASE =
-  (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_AGENT_SERVER_URL) || '';
-
-const USE_REAL_BACKEND = API_BASE.length > 0;
-
 /** 把任意类型的文件上传到后端，返回 Attachment；失败返回 null。
  *  Mock 模式（部署 demo）下不真实落盘，返回伪路径让 UI 可继续走。 */
 export async function uploadFile(
@@ -55,7 +55,7 @@ export async function uploadFile(
   form.append('file', file);
   form.append('session_id', sessionId);
   try {
-    const resp = await fetch(`${API_BASE}/upload`, {
+    const resp = await fetch(`${getAgentApiBase()}/upload`, {
       method: 'POST',
       body: form,
     });

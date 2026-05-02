@@ -6,7 +6,8 @@ Phase 2 → 2026-05-01 升级：
 - prompt 渲染（{subject} {vertical} {raw} 占位 + vertical_prompts 叠加）
 - has_anthropic → **Anthropic ReAct tool_use 循环**：T 可自主决定调
   web_search / read_url / read_excel（见 text_tools.py），实现"思考+查+写"
-- 无 key → 模板 fallback（针对常见 skill 类别给"够看"的占位输出）
+- has_deepseek（且无 Anthropic）→ **DeepSeek Chat** 单次补全（含出图 prompt 的 JSON）
+- 全无 → 模板 fallback（仅用于开发占位）
 
 ReAct 安全护栏：MAX_TOOL_TURNS=4，避免 LLM 无限套娃；
 每次工具调用都流式 yield "tool_call" / "tool_result" 事件给前端做透明性。
@@ -15,7 +16,7 @@ ReAct 安全护栏：MAX_TOOL_TURNS=4，避免 LLM 无限套娃；
 """
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +74,64 @@ def _render_prompt(task: SkillStep, intent: Intent, upstream: list[Any]) -> str:
 MAX_TOOL_TURNS = 4   # ReAct 套娃硬上限，避免 LLM 无限循环
 
 
+def _chunk_for_stream(full_text: str) -> Iterator[str]:
+    """把整段正文切成若干 chunk，前端流式显示更顺滑。"""
+    if not full_text:
+        return
+    step = max(40, min(160, len(full_text) // 12 or 48))
+    for i in range(0, len(full_text), step):
+        yield full_text[i : i + step]
+
+
+def _deepseek_system_hint(task: SkillStep) -> str:
+    """无 Anthropic 时走 DeepSeek：对「出图 prompt」强制 JSON，其余走中文正文。"""
+    td = (task.task or "").lower()
+    if "prompt" in td or "图" in td or "image" in td or "主图" in td:
+        return (
+            "你是电商视觉与静物摄影指导。"
+            "只输出合法 JSON 字符串，格式为 {\"prompts\": [\"提示1\", \"提示2\"]}，恰好两个条目。"
+            "提示需适合文生图模型，可到中英文混合。禁止 markdown 围栏，禁止前后解释。"
+        )
+    return (
+        "你是营销与文案助手。按要求用简体中文作答，条理清晰。"
+        "勿编造法律法规或不实数据。"
+    )
+
+
+async def _deepseek_text_complete(task: SkillStep, user_prompt: str) -> str:
+    """OpenAI-compat Chat Completions，模型默认走 DEEPSEEK_MODEL_FLASH（一般为 deepseek-chat）。"""
+    import httpx
+
+    system = _deepseek_system_hint(task)
+    model = (settings.DEEPSEEK_MODEL_FLASH or "deepseek-chat").strip()
+    url = f"{settings.DEEPSEEK_API_BASE.rstrip('/')}/chat/completions"
+    messages: list[dict[str, str]] = []
+    if system.strip():
+        messages.append({"role": "system", "content": system.strip()})
+    messages.append({"role": "user", "content": user_prompt})
+
+    max_out = getattr(settings, "DEEPSEEK_MAX_OUTPUT_TOKENS", 8192)
+    body: dict[str, object] = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max(512, min(8192, int(max_out))),
+        "temperature": 0.55,
+    }
+
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Bearer {settings.DEEPSEEK_API_KEY}"},
+            json=body,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    msg = (data.get("choices") or [{}])[0].get("message") or {}
+    content = msg.get("content")
+    return content.strip() if isinstance(content, str) and content.strip() else ""
+
+
 async def run(
     task: SkillStep,
     intent: Intent,
@@ -90,8 +149,26 @@ async def run(
                 yield ev
         except Exception as e:  # noqa: BLE001
             logger.warning("text_capability_react_failed_fallback", error=str(e))
+            if settings.has_deepseek:
+                full_text = await _deepseek_text_complete(task, prompt)
+            else:
+                full_text = _template_fallback(task, intent)
+            if full_text:
+                for piece in _chunk_for_stream(full_text):
+                    yield {"type": "chunk", "text": piece, "capability": "T"}
+            else:
+                full_text = _template_fallback(task, intent)
+                yield {"type": "chunk", "text": full_text, "capability": "T"}
+    elif settings.has_deepseek:
+        try:
+            full_text = await _deepseek_text_complete(task, prompt)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("text_deepseek_failed_template", error=str(e))
+            full_text = ""
+        if not full_text.strip():
             full_text = _template_fallback(task, intent)
-            yield {"type": "chunk", "text": full_text, "capability": "T"}
+        for piece in _chunk_for_stream(full_text):
+            yield {"type": "chunk", "text": piece, "capability": "T"}
     else:
         full_text = _template_fallback(task, intent)
         yield {"type": "chunk", "text": full_text, "capability": "T"}
@@ -126,8 +203,8 @@ async def _react_loop(
         # 最后一轮强制不再给 tools，逼模型给最终答案
         tools_arg = TOOL_DEFS if turn < MAX_TOOL_TURNS else None
         kwargs: dict[str, Any] = {
-            "model": settings.ANTHROPIC_MODEL,
-            "max_tokens": 2048,
+            "model": settings.anthropic_model_capability_text,
+            "max_tokens": settings.ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT,
             "messages": messages,
         }
         if tools_arg:

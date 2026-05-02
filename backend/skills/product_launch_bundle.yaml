@@ -1,0 +1,73 @@
+# 新品发布物料包 — 多步 declarative,跨 T+I,一次给齐发布所需文案 + 配图
+id: product_launch_bundle
+name: 新品发布物料包
+version: "1.0"
+description: |
+  新品上市一站式物料:发布预告文案、3 平台适配版本(小红书/微信/朋友圈)、主图 prompt 与生成图、KOL 派样附信。
+  适合品牌方在新品发布周期前 7 天调用。
+deliverable_type: bundle
+
+intent_keywords:
+  - 新品发布
+  - 上新
+  - 上市
+  - 发布物料
+  - launch
+  - 新品物料
+
+negative_keywords:
+  - 标题
+  - 复盘
+  - 月报
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.10
+
+steps:
+  - agent: T
+    task: 写发布预告主文案(150 字)+ 三平台适配版本
+    prompt_template: |
+      你是品牌发布文案专家。{subject}即将上市,写发布物料:
+
+      用户原话: {raw}
+      行业: {vertical}
+
+      输出 markdown 格式,4 段:
+      ## 主文案(150 字,有钩子)
+      ## 小红书版(≤300 字 + 3 个 hashtag)
+      ## 公众号版(≤500 字,小标题分段)
+      ## 朋友圈版(≤80 字 + emoji)
+    outputs:
+      - text-asset (multi-channel-copy)
+
+  - agent: T
+    task: 写主图 prompt(英文 SD/Flux 风格,2 个版本)
+    prompt_template: |
+      为 {subject} 写两条新品主图的英文图生 prompt:
+      1) 产品白底特写
+      2) 使用场景
+
+      只输出 JSON: {"prompts": ["...", "..."]}
+    outputs:
+      - prompts (text)
+
+  - agent: I
+    task: 按 prompt 生成发布主图(白底版 + 场景版)
+    inputs:
+      prompts: ${steps[1].output.prompts}
+    outputs:
+      - image-asset (white_bg)
+      - image-asset (scene)
+
+  - agent: T
+    task: 写 KOL 派样附信(≤200 字)
+    prompt_template: |
+      为 {subject} 写一份 KOL 派样附信(≤200 字):
+      - 第一句:产品独特价值
+      - 第二段:派样背景 / 期待动作(发笔记/试用)
+      - 落款:品牌方简短自我介绍
+      口语化、不要"精心打造""倾力呈现"等套话。
+    outputs:
+      - text-asset (kol-letter)

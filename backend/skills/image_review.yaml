@@ -1,0 +1,47 @@
+# 图片审稿 skill — 用 vision API 分析上传图,给改进建议
+# 这是首个利用 I agent vision 路径的 skill
+id: image_review
+name: 图片审稿与改进建议
+version: "1.0"
+description: |
+  上传一张图(产品图/海报/封面),用 vision LLM 分析:
+    - 视觉重点是否突出
+    - 配色 / 构图 / 留白
+    - 改进建议
+  适合电商主图、小红书封面、活动海报上线前 review。
+deliverable_type: text
+
+intent_keywords:
+  - 审稿
+  - 图片审稿
+  - 看图
+  - 图片分析
+  - 图片诊断
+  - review 图
+
+negative_keywords:
+  - 生成
+  - 写文案
+  - 视频
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.03
+
+steps:
+  - agent: I
+    # task 含"理解/分析/审稿" → I agent 走 vision 路径(详见 backend/app/capabilities/image.py)
+    task: 分析图片(理解 / 审稿 / 给改进建议)
+    prompt_template: |
+      你是电商/营销视觉顾问。请分析这张图,从下面 5 个维度各给 1-2 条具体观察 + 1 条改进建议:
+
+      1. 视觉重心(主体是否突出 / 是否被分散)
+      2. 构图(三分线 / 留白 / 轴线)
+      3. 配色(主色 / 辅色 / 对比度)
+      4. 文字可读性(如有文字 / 字号 / 留白)
+      5. 适配场景(用作 {subject} 时是否合适)
+
+      用 markdown 输出,每个维度一个二级标题。语气专业但口语化,不要"匠心""极致"。
+    outputs:
+      - image-analysis

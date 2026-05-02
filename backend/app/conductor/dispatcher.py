@@ -20,7 +20,7 @@ from app.conductor.clarify import (
     merge_answers,
     needs_clarification,
 )
-from app.conductor.intent import Intent, parse_intent
+from app.conductor.intent import Intent, parse_intent, parse_intent_with_clarify
 from app.conductor.skill_retriever import retrieve
 from app.capabilities import dispatch_to_capability
 from app.skills.registry import SkillSpec
@@ -48,18 +48,24 @@ async def conduct(
     """
     yield {"type": "start", "session_id": session_id}
 
-    # 1. 解析意图（可选第二轮：用户在 clarify 卡里选的答案 merge 进来）
-    intent = await parse_intent(user_text, history)
+    # 1. 解析意图(一次过 LLM:同时拿 intent + clarify_questions,省一次 round-trip)
+    intent, prefetched_clarify = await parse_intent_with_clarify(user_text, history)
     if clarify_answers:
         intent = merge_answers(intent, clarify_answers)
     yield {"type": "intent_parsed", "intent": intent.model_dump()}
 
     # 2. 澄清环节
     if needs_clarification(intent):
-        questions = await generate_questions(intent)
+        if prefetched_clarify:
+            # LLM 一次过的 clarify(intent.py 已规整化为 dict),直接用
+            questions = prefetched_clarify
+        else:
+            # 模板兜底(无 ANTHROPIC_API_KEY 或 LLM 调用失败)
+            qs = await generate_questions(intent)
+            questions = [q.model_dump() for q in qs]
         yield {
             "type": "clarify_required",
-            "questions": [q.model_dump() for q in questions],
+            "questions": questions,
         }
         return  # 等用户答完再走第二轮 conduct()
 
@@ -187,7 +193,7 @@ async def _rerank_with_llm(
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     resp = await client.messages.create(
-        model=settings.ANTHROPIC_MODEL,
+        model=settings.anthropic_model_conductor,
         max_tokens=256,
         system=_RERANK_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],

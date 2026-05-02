@@ -109,7 +109,7 @@ async def _generate_with_llm(intent: Intent) -> list[ClarifyQuestion]:
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     resp = await client.messages.create(
-        model=settings.ANTHROPIC_MODEL,
+        model=settings.anthropic_model_conductor,
         max_tokens=512,
         system=_CLARIFY_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],

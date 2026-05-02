@@ -107,13 +107,104 @@ async def _placeholder(intent: Intent, save_dir: str) -> str:
     return await create_placeholder(text[:30], save_dir)
 
 
+def _is_vision_task(task: SkillStep) -> bool:
+    """判断这一步是"理解图"还是"生成图"。
+
+    规则：task.task / outputs 含"理解 / 分析 / 看图 / 审稿 / understand /
+    analyze / review" 关键词 → vision；否则 → 生成。
+    """
+    blob = (task.task or "") + " " + " ".join(task.outputs or [])
+    blob = blob.lower()
+    for kw in ("理解", "分析", "看图", "审稿", "评估", "rate",
+               "understand", "analyze", "review", "describe"):
+        if kw in blob:
+            return True
+    return False
+
+
+def _extract_image_paths_from_upstream(upstream: list[Any]) -> list[str]:
+    """从上游产出里抽 image artifact 的 file_path（vision 任务用）。"""
+    paths: list[str] = []
+    for entry in upstream or []:
+        for art in (entry.get("artifacts") or []):
+            atype = (art.get("artifact_type") or "").lower()
+            if atype.startswith("image"):
+                fp = art.get("file_path")
+                if fp and os.path.isfile(fp):
+                    paths.append(fp)
+    return paths
+
+
+async def _run_vision(
+    task: SkillStep,
+    intent: Intent,
+    upstream: list[Any],
+    session_id: str,
+) -> AsyncIterator[dict]:
+    """图理解：对上游图片或 intent 中提到的图片调 Anthropic vision。"""
+    images = _extract_image_paths_from_upstream(upstream)
+    if not images:
+        yield {"type": "chunk", "capability": "I",
+               "text": "[I-vision] 上游没有图片可分析；本步骤跳过"}
+        return
+    instruction = (task.prompt_template or task.task or
+                   "请分析这张图，给出 3-5 条具体观察 + 1 条改进建议。"
+                   ).replace("{subject}", intent.subject or "")
+
+    if not settings.has_anthropic:
+        # DEMO 模板兜底
+        for i, img in enumerate(images):
+            text = (f"[DEMO 模板·配 ANTHROPIC_API_KEY 后切换为真 vision]\n\n"
+                    f"图 {i+1} 占位分析:\n"
+                    f"- 主体清晰度：可接受\n"
+                    f"- 构图：中规中矩\n"
+                    f"- 改进建议：增强光线层次")
+            yield {"type": "chunk", "capability": "I", "text": text}
+            yield {
+                "type": "artifact", "capability": "I",
+                "artifact_type": "image-analysis",
+                "title": f"{task.task or '图分析'} #{i+1}",
+                "content_inline": text,
+                "session_id": session_id,
+            }
+        return
+
+    async with ModelGateway(settings) as gw:
+        for i, img in enumerate(images):
+            yield {"type": "chunk", "capability": "I",
+                   "text": f"分析图片 {i+1}/{len(images)}..."}
+            text = await gw.vision("image.understand",
+                                    {"image_path": img, "instruction": instruction})
+            if not text:
+                text = "[vision 调用失败，请检查 ANTHROPIC_API_KEY]"
+            yield {"type": "chunk", "capability": "I", "text": text}
+            yield {
+                "type": "artifact", "capability": "I",
+                "artifact_type": "image-analysis",
+                "title": f"{task.task or '图分析'} #{i+1}",
+                "content_inline": text,
+                "file_path": img,  # 引用被分析的图
+                "session_id": session_id,
+            }
+
+
 async def run(
     task: SkillStep,
     intent: Intent,
     upstream: list[Any],
     session_id: str,
 ) -> AsyncIterator[dict]:
-    """执行一步图能力任务，按 4 级 fallback 出图。"""
+    """执行一步图能力任务。
+
+    路由:
+      - task 含"理解/分析"等关键词 → 走 vision (Anthropic)
+      - 否则走生成 (4 级 fallback)
+    """
+    if _is_vision_task(task):
+        async for ev in _run_vision(task, intent, upstream, session_id):
+            yield ev
+        return
+
     save_dir = _save_dir(session_id)
 
     # Step 1: 取上游 T agent 给的 prompt 数组（电商主图 skill 模式）

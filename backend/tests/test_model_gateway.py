@@ -6,6 +6,12 @@ from app.adapters.model_gateway import ModelGateway
 from app.schemas.news import NewsItem
 
 
+@pytest.fixture(autouse=True)
+def _no_live_deepseek_in_gateway_tests(monkeypatch):
+    """本文件只测离线 fallback：避免载入开发者本机 `.env` 里的 DEEPSEEK_KEY 成真请求。"""
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", None, raising=False)
+
+
 @pytest_asyncio.fixture
 async def gateway():
     gw = ModelGateway(settings)
