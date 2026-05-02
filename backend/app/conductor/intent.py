@@ -263,7 +263,7 @@ async def _parse_intent_with_clarify_llm(
 ) -> tuple[Intent, list[dict]]:
     import anthropic  # noqa: WPS433
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY, base_url=settings.ANTHROPIC_BASE_URL or None)
     messages = []
     for h in history[-4:]:
         if h.get("role") and h.get("content"):

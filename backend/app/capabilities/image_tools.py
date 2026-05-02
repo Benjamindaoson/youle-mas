@@ -124,7 +124,7 @@ async def image_inspect(file_path: str, question: str = "") -> dict:
 
     try:
         import anthropic  # noqa: WPS433
-        client = anthropic.AsyncAnthropic(api_key=choice.api_key)
+        client = anthropic.AsyncAnthropic(api_key=choice.api_key, base_url=choice.api_base or None)
         resp = await client.messages.create(
             model=choice.model,
             max_tokens=choice.max_tokens,

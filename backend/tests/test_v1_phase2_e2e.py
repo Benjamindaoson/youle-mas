@@ -67,8 +67,15 @@ async def _drain(user_text: str, session_id: str) -> list[dict]:
     return out
 
 
-async def test_xiaohongshu_skill_end_to_end_demo_mode():
-    """DEMO 模式下完整跑一次小红书 skill：clarify 不应触发，T agent 出兜底标题。"""
+async def test_xiaohongshu_skill_end_to_end_demo_mode(monkeypatch):
+    """DEMO 模式下完整跑一次小红书 skill：clarify 不应触发，T agent 出兜底标题。
+
+    强制清掉 ANTHROPIC_API_KEY 让 conductor 走启发式路径 — 否则配了真 key
+    时 LLM 可能（合理地）判出缺失槽位，与本测试"无 LLM 时启发式不假阳性"的本意冲突。
+    """
+    from app.config import settings as global_settings
+    monkeypatch.setattr(global_settings, "ANTHROPIC_API_KEY", None, raising=False)
+
     events = await _drain("帮我给面膜写小红书标题", session_id="v1:e2e-xhs")
 
     types = [e["type"] for e in events]
@@ -99,8 +106,14 @@ async def test_xiaohongshu_skill_end_to_end_demo_mode():
     assert artifacts
 
 
-async def test_vague_input_triggers_clarify_then_resolves_with_answers():
-    """模糊输入 → 触发 clarify。前端把答案塞进 clarify_answers 重发 → 走完。"""
+async def test_vague_input_triggers_clarify_then_resolves_with_answers(monkeypatch):
+    """模糊输入 → 触发 clarify。前端把答案塞进 clarify_answers 重发 → 走完。
+
+    强制 DEMO 路径（启发式 conductor），让 missing_slots 行为可预测。
+    """
+    from app.config import settings as global_settings
+    monkeypatch.setattr(global_settings, "ANTHROPIC_API_KEY", None, raising=False)
+
     # 第一轮：模糊
     first = await _drain("帮我做个东西", session_id="v1:e2e-clarify-1")
     assert any(e["type"] == "clarify_required" for e in first)
@@ -136,7 +149,11 @@ async def test_http_skills_endpoint_returns_registered_skills(client):
     assert "ecommerce_main_image" in ids
 
 
-async def test_http_conduct_endpoint_streams_sse(client):
+async def test_http_conduct_endpoint_streams_sse(client, monkeypatch):
+    """HTTP /v1/conduct 端点冒烟。强制 DEMO 让事件序列稳定可断言。"""
+    from app.config import settings as global_settings
+    monkeypatch.setattr(global_settings, "ANTHROPIC_API_KEY", None, raising=False)
+
     r = await client.post("/v1/conduct", json={
         "message": "帮我给面膜写小红书标题",
         "session_id": "v1:http-e2e",

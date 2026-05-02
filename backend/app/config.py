@@ -3,13 +3,31 @@ from __future__ import annotations
 
 import shutil
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """应用配置，字段与 .env.example 一一对应。"""
+    """应用配置，字段与 .env.example 一一对应。
+
+    **优先级**: 项目 `.env` > 进程环境变量 > 字段默认值
+    （pydantic-settings 默认是 env > .env，本项目反过来 — 因为 Claude Code 等
+    工具会在 shell 注入 ANTHROPIC_BASE_URL 等指向官方域名的 env var，会覆盖
+    项目 .env 里的中转配置。本项目 .env 即权威。）
+    """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ):
+        # 把 dotenv 提到 env 之前 — .env 是项目级配置的权威
+        return init_settings, dotenv_settings, env_settings, file_secret_settings
 
     # ---- 运行模式 ----
     # True 时跳过 API Key 校验，所有模型调用走工程 fallback
@@ -17,6 +35,9 @@ class Settings(BaseSettings):
 
     # ---- Anthropic（兜底默认 + per-purpose 路由；各字段留空 → 回落 ANTHROPIC_MODEL）----
     ANTHROPIC_API_KEY: str | None = None
+    # 第三方 anthropic-compatible 中转 (OneAPI / 学钉 token 等); 留空 → 走官方 api.anthropic.com
+    # SDK 会在此 URL 后自动补 /v1/messages
+    ANTHROPIC_BASE_URL: str | None = None
     ANTHROPIC_MODEL: str = "claude-opus-4-7"           # 兜底默认（任何 purpose 没专属配置时用）
 
     # V1 ModelRouter per-purpose 模型（feat(router) c2d9277 引入）

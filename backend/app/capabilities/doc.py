@@ -252,7 +252,7 @@ async def _react_loop(*, task: SkillStep, upstream: list[Any],
         f"pptx_outline（读 PPT 大纲）。完成后给一段中文总结（≤400 字）。"
     )
 
-    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key, base_url=choice.api_base or None)
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
     yield {"type": "chunk", "capability": "D", "text": "[D ReAct] 启动文档分析..."}

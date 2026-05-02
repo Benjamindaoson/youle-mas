@@ -109,7 +109,7 @@ async def _generate_with_llm(intent: Intent) -> list[ClarifyQuestion]:
 
     from app.adapters.model_router import pick_chat
     choice = pick_chat(purpose="conductor_clarify", prefer_provider="anthropic")
-    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key, base_url=choice.api_base or None)
     resp = await client.messages.create(
         model=choice.model,
         max_tokens=choice.max_tokens,

@@ -206,7 +206,7 @@ async def _react_loop(
         # 无 key → 让上层 run() 走 _template_fallback
         raise RuntimeError("anthropic not available for T ReAct")
 
-    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key, base_url=choice.api_base or None)
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
     for turn in range(MAX_TOOL_TURNS + 1):

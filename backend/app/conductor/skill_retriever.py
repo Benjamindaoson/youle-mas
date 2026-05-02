@@ -113,7 +113,7 @@ async def _confirm_with_llm(
 
     from app.adapters.model_router import pick_chat
     choice = pick_chat(purpose="conductor_confirm", prefer_provider="anthropic")
-    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key, base_url=choice.api_base or None)
     resp = await client.messages.create(
         model=choice.model,
         max_tokens=choice.max_tokens,
