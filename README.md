@@ -92,19 +92,28 @@ pnpm dev                      # 浏览器打开 http://localhost:3000
 ```
 
 打开浏览器后:
-- **`/`** = V1 主编排工作台（产品与架构默认入口）。九宫格头像 + **九角色群聊**在 **`/legacy`**。
+- **`/`** = 默认重定向到 **`/legacy`**（九宫格 + 九角色群聊工作台）。
+- **`/v1`** = V1「主编排」工作台。
 - **`/skills`** = 看后端注册的所有 skill(declarative DAG 或 runner-based)。
 - **`/artifacts`** = 真实产出物历史。
-- **`/legacy`** = V0 9 角色群聊 demo,保留作为视觉参考。
+- **`/legacy`** = 九宫格 + **九角色群聊**的直接入口。
 
-切真实模型:`backend/.env` 设 `DEMO_MODE=false` + 填 `ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY` / `SILICONFLOW_API_KEY` / `MINIMAX_API_KEY`。无 key 时全部走模板 fallback,链路不崩。
+### 前端连后端（Legacy 若出现 `Failed to fetch`）
+
+1. **确认后端监听**：`cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 8001`。
+2. **推荐**：在 `frontend/.env.local` 写 `NEXT_PUBLIC_AGENT_SERVER_URL=http://127.0.0.1:8001`（端口与后端一致）。**`pnpm dev` 下即使不写也会默认尝试本机 `:8001`**；若只想前端纯 mock：`NEXT_PUBLIC_AGENT_MOCK_ONLY=1`。
+3. **同源转发**：只要你在浏览器里用 **`localhost` / `127.0.0.1` / `[::1]`** 打开前端，且配置的也是本环回同源端口后端，运行时会把 Base 改写为站内 **`/api/youle-backend`**，由 Next（`next.config.mjs` 的 rewrite）代为访问 `YOULE_BACKEND_INTERNAL_URL`（默认 `http://127.0.0.1:8001`），**与 `pnpm dev` 还是 `next start` 无关**。
+4. 若要浏览器强行直连：`NEXT_PUBLIC_AGENT_SERVER_PROXY=false`。
+5. 修改 `next.config` 或前端 env 后需**重启** dev / start。
+
+切真实模型:`backend/.env` 设 `DEMO_MODE=false` + 填 `ANTHROPIC_API_KEY`、`DEEPSEEK_API_KEY`、`SILICONFLOW_API_KEY`、`MINIMAX_API_KEY` 等。无密钥时链路不崩：**T** 会先尝试 LLM —— 有 Claude 则 ReAct；**仅有 DeepSeek** 则用 `DEEPSEEK_MODEL_FLASH` 走 Chat（含出图 prompt 的 JSON）；完全无密钥才走 DEMO 模板。
 
 ### 文本 / 编排默认选型（`backend/.env`）
 
 | 调用方 | 变量 | 默认旗舰 |
 |---|---|---|
 | **主编排 Conductor**（意图 parse、澄清、skill 语义重排、dispatcher 选路） | `ANTHROPIC_MODEL`，可用 `ANTHROPIC_MODEL_CONDUCTOR` 单独覆盖 | **`claude-opus-4-7`** |
-| **V1 T 能力**（ReAct tool_use + **视觉理解**走同一套 Claude） | `ANTHROPIC_MODEL_CAPABILITY_TEXT`，可调 `ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT`（默认 8192） | 同上 |
+| **V1 T 能力**（ReAct tool_use + **视觉理解**走 Claude；无 Claude 则用 DeepSeek） | `ANTHROPIC_MODEL_CAPABILITY_TEXT`、`ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT`；备选 `DEEPSEEK_MODEL_FLASH` | Claude：同上 **`claude-opus-4-7`**；仅 DeepSeek：**`deepseek-chat`** · 均无 key → DEMO |
 | **V0 单聊九大角色** | `ANTHROPIC_MODEL_ROLE_CHAT`，可调 `ANTHROPIC_MAX_OUTPUT_TOKENS_ROLE_CHAT`（默认 4096） | 同上 |
 | **LangGraph「文本脚本」网关**（反诈口播稿 JSON 等） | `DEEPSEEK_MODEL_PRO`（`DEEPSEEK_MODEL_FLASH` 预留快路径） | **`deepseek-reasoner`** · 若 JSON/`response_format` 不兼容再改回 **`deepseek-chat`** |
 | **D 文档能力** | （无独立 LLM） | 版式与结构由 **上游 T 的 markdown** + 本地 `python-pptx` 等生成 |
@@ -119,7 +128,7 @@ pnpm dev                      # 浏览器打开 http://localhost:3000
 
 ## V0 → V1 演进
 
-| 维度 | V0(在 `/legacy` 保留) | V1(默认 `/`) |
+| 维度 | V0（`/`，实际进 `/legacy`） | V1（`/v1`） |
 |---|---|---|
 | Agent 切分 | 9 角色(chief / analyst / writer / ...) | 4 能力(T / I / V / D) |
 | 派工 | chief 关键词匹配 | 主编排 LLM 意图理解 + skill 召回 |
