@@ -23,7 +23,8 @@ export default function Home() {
             <h1 className="font-serif text-lg font-semibold text-ink">有了 · 主编排</h1>
             <p className="text-[11px] text-ink-3">
               <Sparkles className="inline w-3 h-3 mr-1" />
-              意图理解 + skill 调度 + 4 能力 agent (T/I/V/D)
+              意图理解 + skill 调度 + 4 能力 agent (T/I/V/D)。
+              <span className="text-ink-4 ml-1">（想找 9 个同事头像工作台请点右上角「九角色群聊」。）</span>
             </p>
           </div>
           <nav className="flex items-center gap-3 text-xs">
@@ -32,10 +33,10 @@ export default function Home() {
             <Link
               href="/legacy"
               className="flex items-center gap-1 text-ink-3 hover:text-ink-2"
-              title="V0 角色 demo（9 头像）"
+              title="九宫格头像 + 群聊 / 单聊（V0 演示）"
             >
               <Layers className="w-3 h-3" />
-              旧版
+              九角色群聊
             </Link>
           </nav>
         </div>

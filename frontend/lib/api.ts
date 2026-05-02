@@ -23,6 +23,19 @@ const REAL_API_BASE =
 const USE_REAL_BACKEND =
   typeof REAL_API_BASE === 'string' && REAL_API_BASE.length > 0;
 
+/** 是否已配置真实后端（由构建时 NEXT_PUBLIC_AGENT_SERVER_URL 决定）。 */
+export const IS_REAL_AGENT_SERVER_BACKEND = USE_REAL_BACKEND;
+
+/** 跨域/未启动后端时浏览器的典型报错，附排查句。 */
+function formatBackendFetchError(message: string): string {
+  const tip =
+    '请先启动 backend：`cd backend && uv run uvicorn app.main:app --port 8001`。从 127.0.0.1 打开前端时，后端需放行该源 CORS（已内置）。';
+  if (/Failed to fetch|NetworkError|Load failed|fetch failed|networkerror/i.test(message)) {
+    return `${message} ${tip}`;
+  }
+  return message;
+}
+
 /** 后端 agent 上线状态（mock 默认全员可对话）。 */
 export const AVAILABLE_AGENTS = new Set<string>([
   'chief',
@@ -561,7 +574,7 @@ async function realStreamChat(
     });
   } catch (e: unknown) {
     if (e instanceof DOMException && e.name === 'AbortError') return;
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
     onEvent({ type: 'error', message: `连不上后端（${REAL_API_BASE}）：${msg}` });
     return;
   }
@@ -699,7 +712,7 @@ export async function streamTeamChat(
       });
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
       onEvent({ type: 'error', message: `连不上后端（${REAL_API_BASE}）：${msg}` });
       return;
     }
@@ -883,7 +896,7 @@ export async function streamTeamResume(
     });
   } catch (e: unknown) {
     if (e instanceof DOMException && e.name === 'AbortError') return;
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
     onEvent({ type: 'error', message: `resume 请求失败：${msg}` });
     return;
   }
@@ -1147,8 +1160,16 @@ export type V1ConductEvent =
 /** 列出后端注册的所有 skill。Mock 模式下返回 demo 条目以便 UI 渲染。 */
 export async function listV1Skills(): Promise<V1Skill[]> {
   if (USE_REAL_BACKEND) {
-    const resp = await fetch(`${REAL_API_BASE}/v1/skills`);
-    if (!resp.ok) return [];
+    let resp: Response;
+    try {
+      resp = await fetch(`${REAL_API_BASE}/v1/skills`);
+    } catch (e: unknown) {
+      const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
+      throw new Error(`无法加载 /v1/skills：${msg}`);
+    }
+    if (!resp.ok) {
+      throw new Error(`GET /v1/skills HTTP ${resp.status}`);
+    }
     const data = await resp.json();
     return (data.items ?? []) as V1Skill[];
   }
@@ -1205,46 +1226,55 @@ export async function streamV1Conduct(
     return;
   }
 
-  const resp = await fetch(`${REAL_API_BASE}/v1/conduct`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: params.message,
-      session_id: params.sessionId,
-      clarify_answers: params.clarifyAnswers,
-    }),
-    signal,
-  });
-
-  if (!resp.ok || !resp.body) {
-    onEvent({
-      type: 'error',
-      message: `连不上 V1 Conductor（${REAL_API_BASE}/v1/conduct）：HTTP ${resp.status}`,
+  try {
+    const resp = await fetch(`${REAL_API_BASE}/v1/conduct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: params.message,
+        session_id: params.sessionId,
+        clarify_answers: params.clarifyAnswers,
+      }),
+      signal,
     });
-    return;
-  }
 
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+    if (!resp.ok || !resp.body) {
+      onEvent({
+        type: 'error',
+        message: `连不上 V1 Conductor（${REAL_API_BASE}/v1/conduct）：HTTP ${resp.status}`,
+      });
+      return;
+    }
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() ?? '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    for (const frame of frames) {
-      const line = frame.trim();
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const ev = JSON.parse(line.slice(6)) as V1ConductEvent;
-        onEvent(ev);
-      } catch {
-        // 忽略无法解析的帧
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() ?? '';
+
+      for (const frame of frames) {
+        const line = frame.trim();
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const ev = JSON.parse(line.slice(6)) as V1ConductEvent;
+          onEvent(ev);
+        } catch {
+          // 忽略无法解析的帧
+        }
       }
     }
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') return;
+    const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
+    onEvent({
+      type: 'error',
+      message: `V1 Conductor 请求失败（${REAL_API_BASE}）：${msg}`,
+    });
   }
 }

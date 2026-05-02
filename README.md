@@ -74,7 +74,7 @@ youle_mas/
 | `streamChat()` / `streamTeamChat()` | `POST /chat` / `/chat/team` (SSE) | V0 单聊 / 群聊(legacy 用) |
 | `listAllArtifacts()` 等 | `/artifacts*` | 跨 V0/V1 产出库 |
 
-Backend 的 CORS 已放通本地任意端口。详细字段对齐见 `backend/app/api/routes.py` 与 `frontend/lib/api.ts` 顶部注释。
+Backend 的 CORS 已放行本机 **`http://localhost:<端口>`、`http://127.0.0.1:<端口>`、`http://[::1]:<端口>`**（`localhost` 与 `127.0.0.1` 在浏览器里算作不同 Origin，缺一即会表现为「Failed to fetch」）。详细字段对齐见 `backend/app/api/routes.py` 与 `frontend/lib/api.ts`。
 
 ## 快速开始
 
@@ -92,7 +92,7 @@ pnpm dev                      # 浏览器打开 http://localhost:3000
 ```
 
 打开浏览器后:
-- **`/`** = V1 主编排工作台。直接在输入框告诉它"做一份 8 月复盘 PPT" / "给面膜写小红书标题",主编排自动选 skill + 派工。
+- **`/`** = V1 主编排工作台（产品与架构默认入口）。九宫格头像 + **九角色群聊**在 **`/legacy`**。
 - **`/skills`** = 看后端注册的所有 skill(declarative DAG 或 runner-based)。
 - **`/artifacts`** = 真实产出物历史。
 - **`/legacy`** = V0 9 角色群聊 demo,保留作为视觉参考。
