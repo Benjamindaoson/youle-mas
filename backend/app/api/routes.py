@@ -151,11 +151,60 @@ class AuthUpdate(BaseModel):
 
 @router.get("/")
 async def root():
-    return {"service": "youle-backend", "version": "0.1.0", "status": "ok"}
+    """根路由 — 列出 V1 主端点 + 标注 V0 legacy。"""
+    return {
+        "service": "youle-backend",
+        "version": "0.1.0",
+        "status": "ok",
+        "v1_default": [
+            "POST /v1/conduct",         # 主编排：意图 → clarify → skill → dispatch
+            "GET /v1/skills",           # skill 注册表
+            "GET /skills",              # /v1/skills 别名
+            "GET /capabilities",        # 4 capability agent 元信息
+        ],
+        "v0_legacy_deprecated": [
+            "POST /chat",               # 9 员工单聊
+            "POST /chat/team",          # 9 员工群聊（新消息会先经 skill registry）
+            "GET /agents",              # 9 员工列表
+        ],
+        "note": (
+            "V0 端点仍可用以保持现有客户端不破，但产品愿景是 V1（4 capability agent + "
+            "Conductor + skill 市场）。新接入请用 /v1/conduct。"
+        ),
+    }
 
 
-@router.get("/agents")
+@router.get("/capabilities")
+async def list_capabilities():
+    """V1 4 个能力 agent 的元信息 — 给前端展示用，对应 capabilities/{T,I,V,D}.py。"""
+    return {
+        "capabilities": [
+            {"key": "T", "name": "文字 / 语言",
+             "description": "写作 / 推理 / 数据收集 / 分析（ReAct + 3 工具）",
+             "tools": ["web_search", "read_url", "read_excel"]},
+            {"key": "I", "name": "图",
+             "description": "理解 / 生成 / 改图（ReAct + 3 vision 工具）",
+             "tools": ["image_inspect", "image_resize", "palette_extract"]},
+            {"key": "V", "name": "视频（含音频）",
+             "description": "理解 / 生成 / 改视频（ReAct + 3 工具）",
+             "tools": ["video_probe", "extract_keyframes", "subtitle_to_script"]},
+            {"key": "D", "name": "办公文档",
+             "description": "PDF / Excel / PPT 抽取 + 生成（ReAct + 4 工具）",
+             "tools": ["pdf_extract", "excel_pivot", "csv_pivot", "pptx_outline"]},
+        ],
+    }
+
+
+# ==================== V0 Legacy Endpoints ====================
+# 以下端点是 V0 9 员工拟人化的入口，保留以兼容现有前端 /legacy 页面。
+# 产品愿景是 V1（/v1/conduct + capabilities/* + skills/*）。
+# 新接入请用 V1，不要再扩展 V0。
+# ============================================================
+
+
+@router.get("/agents", deprecated=True)
 async def list_agents():
+    """[DEPRECATED V1] 9 员工列表。新代码请用 GET /capabilities。"""
     agents = [
         {"id": "chief", "name": "理", "role": "首席助理", "available": True},
         {"id": "analyst", "name": "析", "role": "分析员", "available": True},
@@ -167,12 +216,14 @@ async def list_agents():
         {"id": "frontend", "name": "端", "role": "前端工程师", "available": True},
         {"id": "tester", "name": "测", "role": "测试工程师", "available": True},
     ]
-    return {"agents": agents}
+    return {"agents": agents, "_deprecated": "use /capabilities for V1"}
 
 
-# ==================== /chat — 单聊 SSE ====================
+# ==================== /chat — 单聊 SSE [V0 Legacy] ====================
+# 9 员工拟人化单聊入口。V1 主入口是 POST /v1/conduct（含意图理解 + skill 选用）。
+# 保留是为了让前端 /legacy 页面继续工作。新代码不要扩展 V0。
 
-@router.post("/chat")
+@router.post("/chat", deprecated=True)
 async def chat(req: ChatRequest):
     agent_id = req.agent_id
     meta = role_meta(agent_id)
@@ -225,7 +276,7 @@ async def chat(req: ChatRequest):
 # 与 V0 关键词分支的区别：路由由 skill 注册表数据驱动，添加新 skill 不需改本文件。
 # ===========================================================
 
-@router.post("/chat/team")
+@router.post("/chat/team", deprecated=True)
 async def chat_team(request: Request, req: TeamChatRequest):
     session_id = req.session_id or f"group:adhoc-{uuid.uuid4().hex[:12]}"
     if session_id in ARCHIVED_SESSIONS:
