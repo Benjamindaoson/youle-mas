@@ -65,15 +65,15 @@ export default function LegacyHome() {
 
   return (
     <div className="flex flex-col h-screen bg-bg overflow-hidden">
-      {/* V0 / 旧版工作台 — 9 头像 demo。新流程请走 V1 主编排（/）。 */}
+      {/* 默认主页：九宫格 + 派活/V1 conductor 可走群聊 SSE。 */}
       <div className="flex items-center justify-between bg-amber-50 border-b border-amber-200 px-4 py-1.5 text-[11px] text-amber-900">
         <span>
-          <span className="font-medium">旧版工作台 (V0 demo)</span>
+          <span className="font-medium">工作室（九宫格）</span>
           <span className="mx-2">·</span>
-          9 头像角色化 chat,流程是关键词派活
+          9 角色群聊 / 单聊；派活默认走后端主编排链路
         </span>
-        <a href="/" className="underline hover:no-underline">
-          ← 切回 V1 主编排
+        <a href="/v1" className="underline hover:no-underline">
+          V1 主编排工作台 →
         </a>
       </div>
       <div className="flex flex-1 overflow-hidden">

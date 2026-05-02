@@ -1,3 +1,5 @@
+import { USE_REAL_AGENT_BACKEND, getAgentApiBase } from './agent-server-base';
+
 // 岗位类型
 export type RoleId =
   | 'chief'
@@ -925,15 +927,20 @@ export interface ResourceItem {
   externalHref?: string;
 }
 
-/** 与 NEXT_PUBLIC_AGENT_SERVER_URL 同源的后端 Observability（默认 localhost:8001） */
+/** 与后端 Observability 页的链接（开发时代理路径则用当前站点同源）。 */
 export function observabilityDashboardUrl(): string {
-  const raw =
-    typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_AGENT_SERVER_URL : '';
-  const base =
-    typeof raw === 'string' && raw.trim().length > 0
-      ? raw.replace(/\/$/, '')
-      : 'http://127.0.0.1:8001';
-  return `${base}/observability`;
+  if (!USE_REAL_AGENT_BACKEND) {
+    return 'http://127.0.0.1:8001/observability';
+  }
+  const base = getAgentApiBase();
+  const path = '/observability';
+  if (base.startsWith('/')) {
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      return `${window.location.origin}${base}${path}`;
+    }
+    return `http://127.0.0.1:8001${path}`;
+  }
+  return `${base}${path}`;
 }
 
 // 消息类型
