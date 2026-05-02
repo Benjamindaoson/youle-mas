@@ -1151,6 +1151,7 @@ export type V1ConductEvent =
   | { type: 'agent_done'; capability?: V1CapabilityKey; step_idx?: number }
   | { type: 'deliverable'; skill_id: string; artifacts: unknown[] }
   | { type: 'done' }
+  | { type: 'warning'; message: string; capability?: V1CapabilityKey }
   | { type: 'error'; message: string };
 
 /** 列出后端注册的所有 skill。Mock 模式下返回 demo 条目以便 UI 渲染。 */
