@@ -111,6 +111,16 @@ class ModelGateway:
             return str(u) if u else None
         return None
 
+    @staticmethod
+    def _deepseek_assistant_content_text(message: object) -> str:
+        """从 DeepSeek(OpenAI-compat) choices[0].message 取可读正文。"""
+        if not isinstance(message, dict):
+            return ""
+        c = message.get("content")
+        if isinstance(c, str) and c.strip():
+            return c.strip()
+        return ""
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, max=8))
     async def _call_deepseek(self, payload: dict) -> dict:
         client = await self._get_client()
@@ -140,13 +150,16 @@ class ModelGateway:
                 "model": self.settings.DEEPSEEK_MODEL_PRO,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
+                "max_tokens": max(512, int(self.settings.DEEPSEEK_MAX_OUTPUT_TOKENS)),
                 "response_format": {"type": "json_object"},
             },
         )
         resp.raise_for_status()
         try:
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            content = self._deepseek_assistant_content_text(
+                data["choices"][0].get("message") or {},
+            )
         except (json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
             # 上游返回非预期结构：记录并抛出，让 text() 走模板兜底
             preview = (resp.text or "")[:200]

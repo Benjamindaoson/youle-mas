@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
     DEEPSEEK_MODEL_PRO: str = "deepseek-reasoner"
     DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"
+    # 反诈脚本等长 JSON：`reasoning` 会占 completion，需留出正式输出篇幅
+    DEEPSEEK_MAX_OUTPUT_TOKENS: int = 8192
 
     # ---- SiliconFlow（图片生成）----
     SILICONFLOW_API_KEY: str | None = None
