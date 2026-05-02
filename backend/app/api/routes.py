@@ -92,29 +92,31 @@ def _safe_dir(sid: str) -> str:
     return re.sub(r"_+", "_", s).strip("_") or "default"
 
 
-def _history_path(sid: str) -> Path:
-    return _HISTORY_DIR / f"{_safe_dir(sid)}.json"
+# 持久化升级（V1 完成度，2026-05-02）：
+# 把 ./data/history/*.json 单文件方案换成 SQLite（app/storage/chat_store.py）。
+# 启动时 chat_store.load_all() 自动从旧 JSON 平滑迁移到 SQLite。
+from app.storage import chat_store
 
 
 def _save_history(sid: str) -> None:
+    """落盘 session 的 turns 到 SQLite。"""
     with _STATE_LOCK:
         turns = list(CHAT_HISTORY.get(sid, []))
     try:
-        _history_path(sid).write_text(
-            json.dumps(turns, ensure_ascii=False, indent=2), encoding="utf-8")
-    except OSError:
-        pass
+        chat_store.save_session(sid, turns)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("chat_history_save_failed", sid=sid, error=str(e))
 
 
 def _load_all_history() -> None:
-    for f in _HISTORY_DIR.glob("*.json"):
-        try:
-            turns = json.loads(f.read_text(encoding="utf-8"))
-            if isinstance(turns, list):
-                with _STATE_LOCK:
-                    CHAT_HISTORY[f.stem.replace("_", ":", 1)] = turns
-        except (OSError, json.JSONDecodeError):
-            continue
+    """启动时把 SQLite 里所有 session load 进 CHAT_HISTORY 内存 cache。"""
+    try:
+        loaded = chat_store.load_all()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("chat_history_load_failed", error=str(e))
+        return
+    with _STATE_LOCK:
+        CHAT_HISTORY.update(loaded)
 
 
 _load_all_history()
@@ -990,9 +992,7 @@ async def clear_history(session_id: str):
         existed = session_id in CHAT_HISTORY
         CHAT_HISTORY.pop(session_id, None)
     try:
-        p = _history_path(session_id)
-        if p.exists():
-            p.unlink()
-    except OSError:
-        pass
+        chat_store.delete_session(session_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("chat_history_delete_failed", sid=session_id, error=str(e))
     return {"session_id": session_id, "cleared": existed}
