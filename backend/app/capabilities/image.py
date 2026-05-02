@@ -178,13 +178,22 @@ async def run(
            "text": f"为 {len(prompts)} 条 prompt 准备图片..."}
 
     produced_paths: list[str] = []
+    warned_no_key = False
     for i, prompt in enumerate(prompts):
         # L1 直接 URL（reference_image）：upstream 没塞，先跳过；MVP 不在这里支持
         # L2 og:image：图能力一般无 url 输入，跳过
         # L3 AI 生成
         path: str | None = None
+        used_real_model = False
         if settings.has_siliconflow:
             path = await _try_generate(prompt, save_dir)
+            used_real_model = path is not None
+        elif not warned_no_key:
+            yield {
+                "type": "warning", "capability": "I",
+                "message": "未配置 SILICONFLOW_API_KEY，将用 PIL 占位图代替真实出图",
+            }
+            warned_no_key = True
 
         # L4 占位图永远兜底
         if path is None:
@@ -192,8 +201,17 @@ async def run(
                 path = await _placeholder(intent, save_dir)
                 logger.info("i_agent_used_placeholder",
                             session_id=session_id, idx=i)
+                if settings.has_siliconflow and not used_real_model:
+                    yield {
+                        "type": "warning", "capability": "I",
+                        "message": f"第 {i + 1} 张图：模型生成失败，已降级为占位图",
+                    }
             except Exception as e:  # noqa: BLE001
                 logger.warning("i_agent_placeholder_failed", error=str(e))
+                yield {
+                    "type": "warning", "capability": "I",
+                    "message": f"第 {i + 1} 张图：占位图也生成失败（{e}），跳过",
+                }
                 continue
 
         produced_paths.append(path)
