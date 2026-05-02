@@ -1,0 +1,53 @@
+# 营销周报 skill — T 写大纲 → D 出 PPT,与 monthly_report 区分(周维度+营销视角)
+id: weekly_marketing_report
+name: 营销周报 PPT
+version: "1.0"
+description: |
+  营销/运营周维度复盘 PPT,围绕 4 平台数据 + 内容产出 + 投放结果 + 下周计划。
+  适合周一上午发给团队 / 老板的标准化周报。
+deliverable_type: doc
+
+intent_keywords:
+  - 周报
+  - 营销周报
+  - 内容周报
+  - 运营周报
+  - 周报 PPT
+
+negative_keywords:
+  - 月报
+  - 季报
+  - 主图
+  - 视频脚本
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.03
+
+steps:
+  - agent: T
+    task: 撰写营销周报大纲(markdown,5-7 页)
+    prompt_template: |
+      为以下品牌/项目写营销周报大纲(markdown):
+
+      主题: {subject}
+      行业: {vertical}
+      用户原话: {raw}
+
+      结构(markdown,每个二级标题对应 PPT 一页):
+      ## 本周关键指标(粉丝增长 / 互动率 / 转化数 — 占位即可,留待真数据填)
+      ## 4 平台内容产出(小红书 / 抖音 / 微信 / 微博,各 1-2 条)
+      ## 投放亮点(哪几条 ROI 最高,简短归因)
+      ## 用户洞察(本周 1 条值得注意的评论/反馈)
+      ## 下周计划(3 件具体事 + 责任人占位)
+      ## 风险与求助(0-2 条 — 没有就写"无")
+
+      每个二级标题下 3-5 条要点(- 开头),不要超过 5 条。
+    outputs:
+      - text-asset (outline)
+
+  - agent: D
+    task: 把大纲渲染成 pptx
+    outputs:
+      - pptx

@@ -107,7 +107,12 @@ async def _placeholder(intent: Intent, save_dir: str) -> str:
     return await create_placeholder(text[:30], save_dir)
 
 
-_REACT_KEYWORDS = ("看图", "理解", "改图", "调色", "测色", "审核", "review", "inspect")
+_REACT_KEYWORDS = (
+    # HEAD: 看图 / 改图相关
+    "看图", "理解", "改图", "调色", "测色", "审核", "review", "inspect",
+    # 并入 master 的 vision 关键词，覆盖更广（feat(I-agent) ReAct 也能做单次理解）
+    "分析", "审稿", "评估", "rate", "understand", "analyze", "describe",
+)
 
 
 def _should_use_react(task: SkillStep, upstream: list[Any]) -> bool:
@@ -128,6 +133,7 @@ def _should_use_react(task: SkillStep, upstream: list[Any]) -> bool:
     return False
 
 
+
 async def run(
     task: SkillStep,
     intent: Intent,
@@ -137,9 +143,10 @@ async def run(
     """执行一步图能力任务。
 
     两条路径：
-    - **ReAct 理解/改图**：上游有图 + task 含"看/改/调色"等关键词 → 走 vision tool_use
+    - **ReAct 理解/改图**：上游有图 + task 含"看/改/调色/分析/审稿"等关键词 → 走 vision tool_use
     - **生成**（默认）：无上游图或 task 是生成类 → 4 级 fallback 出图
     """
+
     save_dir = _save_dir(session_id)
 
     if _should_use_react(task, upstream):

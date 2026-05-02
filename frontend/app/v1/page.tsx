@@ -9,7 +9,11 @@ export default function V1Page() {
     <div className="min-h-screen bg-bg flex flex-col">
       <header className="sticky top-0 z-10 bg-bg border-b border-line">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
-          <Link href="/" className="p-2 hover:bg-bg-hover rounded-lg transition-colors">
+          <Link
+            href="/legacy"
+            className="p-2 hover:bg-bg-hover rounded-lg transition-colors"
+            title="返回九宫格工作台"
+          >
             <ArrowLeft className="w-5 h-5 text-ink-3" />
           </Link>
           <div className="flex-1">

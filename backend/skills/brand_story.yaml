@@ -1,0 +1,46 @@
+# 品牌故事 skill — T 单步,产出一份品牌叙事文本
+id: brand_story
+name: 品牌故事
+version: "1.0"
+description: |
+  根据品牌名/品类/差异化卖点,写一份 600-800 字的品牌故事(创始动机 + 关键转折 + 价值观 + 视觉锚点)。
+  适合官网 About、品牌 deck 第一页、KOL 派样附信。
+deliverable_type: text
+
+intent_keywords:
+  - 品牌故事
+  - 品牌叙事
+  - brand story
+  - 品牌内核
+  - 创始故事
+
+negative_keywords:
+  - 标题
+  - 海报
+  - 主图
+  - 视频
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.02
+
+steps:
+  - agent: T
+    task: 撰写品牌故事(600-800 字)
+    prompt_template: |
+      你是品牌叙事写作专家。为以下品牌写一份品牌故事:
+
+      品牌/主题: {subject}
+      行业垂直: {vertical}
+      用户原话: {raw}
+
+      结构要求:
+      1. 创始动机(1 段,具体场景)
+      2. 关键转折(1 段,真实困境 + 解决路径)
+      3. 价值观(1 段,3 条具体主张,不要"匠心""极致"这种空话)
+      4. 视觉锚点(1 段,1-2 个标志性符号/颜色/动作)
+
+      长度 600-800 字,第二人称视角,文案能直接用在官网 About。
+    outputs:
+      - text-asset (story)

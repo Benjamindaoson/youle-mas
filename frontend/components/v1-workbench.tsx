@@ -86,6 +86,7 @@ export function V1Workbench() {
   const [cards, setCards] = useState<WorkbenchCard[]>([]);
   const [running, setRunning] = useState(false);
   const [skills, setSkills] = useState<V1Skill[]>([]);
+  const [skillsLoadError, setSkillsLoadError] = useState<string | null>(null);
   const [pendingClarify, setPendingClarify] = useState<{
     questions: V1ClarifyQuestion[];
     originalMessage: string;
@@ -95,7 +96,14 @@ export function V1Workbench() {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    listV1Skills().then(setSkills).catch(() => {});
+    listV1Skills()
+      .then((s) => {
+        setSkills(s);
+        setSkillsLoadError(null);
+      })
+      .catch((err) =>
+        setSkillsLoadError(err instanceof Error ? err.message : String(err)),
+      );
   }, []);
 
   // 自动滚到底
@@ -255,6 +263,15 @@ export function V1Workbench() {
   // ---------- 渲染 ----------
   return (
     <div className="h-full flex flex-col max-w-5xl mx-auto w-full">
+      {skillsLoadError && (
+        <div className="mx-6 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-900 flex gap-2 items-start">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden />
+          <div>
+            <p className="font-medium">连不上后端 / 无法加载 skill 列表</p>
+            <p className="mt-1 text-amber-950/85">{skillsLoadError}</p>
+          </div>
+        </div>
+      )}
       {/* 4 能力 agent 面板 */}
       <div className="px-6 py-4 border-b border-line">
         <div className="grid grid-cols-4 gap-3">

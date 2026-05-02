@@ -15,21 +15,32 @@ class Settings(BaseSettings):
     # True 时跳过 API Key 校验，所有模型调用走工程 fallback
     DEMO_MODE: bool = True
 
-    # ---- Anthropic（默认 chat / 编排 / vision）----
+    # ---- Anthropic（兜底默认 + per-purpose 路由；各字段留空 → 回落 ANTHROPIC_MODEL）----
     ANTHROPIC_API_KEY: str | None = None
     ANTHROPIC_MODEL: str = "claude-opus-4-7"           # 兜底默认（任何 purpose 没专属配置时用）
-    # Per-purpose 模型（V1 完成度，按 purpose 切不同模型）
-    ANTHROPIC_MODEL_CONDUCTOR: str = ""                 # 编排 / 重排 / 澄清；空 → ANTHROPIC_MODEL
+
+    # V1 ModelRouter per-purpose 模型（feat(router) c2d9277 引入）
+    ANTHROPIC_MODEL_CONDUCTOR: str = ""                 # 编排 / 重排 / 澄清
     ANTHROPIC_MODEL_INTENT: str = ""                    # 意图解析（短/快）
     ANTHROPIC_MODEL_T: str = ""                         # T capability ReAct
     ANTHROPIC_MODEL_VISION: str = ""                    # I/V capability 看图/看视频帧
 
+    # 旧的 per-role 字段（PR #9 引入，T agent / V0 角色聊天还在用，保留向后兼容）
+    ANTHROPIC_MODEL_CAPABILITY_TEXT: str = ""
+    ANTHROPIC_MODEL_ROLE_CHAT: str = ""
+    ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT: int = 8192
+    ANTHROPIC_MAX_OUTPUT_TOKENS_ROLE_CHAT: int = 4096
+
     # ---- DeepSeek（中文 / 推理 / 兜底）----
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL_PRO: str = "deepseek-chat"           # 写作主力（chat 模型）
-    DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"         # 快速分类 / fallback
-    DEEPSEEK_MODEL_REASONER: str = "deepseek-reasoner"  # 复杂推理（用于 conductor 备选）
+    # PRO 默认 deepseek-chat：reasoner 把 reasoning 文本塞 content 导致短 JSON 截断
+    # （本仓库 backend/scripts/verify_deepseek.py 已验证 chat 可通过 ScriptSchema）
+    DEEPSEEK_MODEL_PRO: str = "deepseek-chat"
+    DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"
+    DEEPSEEK_MODEL_REASONER: str = "deepseek-reasoner"  # 显式推理路径（conductor 备选）
+    # 反诈脚本等长 JSON：`reasoning` 会占 completion，需留出正式输出篇幅
+    DEEPSEEK_MAX_OUTPUT_TOKENS: int = 8192
 
     # ---- SiliconFlow（图片生成）----
     SILICONFLOW_API_KEY: str | None = None
@@ -65,6 +76,23 @@ class Settings(BaseSettings):
     IMAGE_MAX_SIZE_MB: int = 10        # 单张图片大小上限
     FFMPEG_TIMEOUT: int = 120          # FFmpeg 合成超时（秒）
     TTS_TIMEOUT: int = 90              # HD TTS 可能较慢，放宽默认超时
+
+    # ---- 模型别名（留空则用 ANTHROPIC_MODEL）----
+
+    @property
+    def anthropic_model_conductor(self) -> str:
+        m = self.ANTHROPIC_MODEL_CONDUCTOR.strip()
+        return m if m else self.ANTHROPIC_MODEL
+
+    @property
+    def anthropic_model_capability_text(self) -> str:
+        m = self.ANTHROPIC_MODEL_CAPABILITY_TEXT.strip()
+        return m if m else self.ANTHROPIC_MODEL
+
+    @property
+    def anthropic_model_role_chat(self) -> str:
+        m = self.ANTHROPIC_MODEL_ROLE_CHAT.strip()
+        return m if m else self.ANTHROPIC_MODEL
 
     # ---- 便捷属性：判断各 API Key 是否真实可用 ----
 
