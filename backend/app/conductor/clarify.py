@@ -107,10 +107,12 @@ async def _generate_with_llm(intent: Intent) -> list[ClarifyQuestion]:
         f"为每个缺失槽位写 1 个自然反问。"
     )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from app.adapters.model_router import pick_chat
+    choice = pick_chat(purpose="conductor_clarify", prefer_provider="anthropic")
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
     resp = await client.messages.create(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=512,
+        model=choice.model,
+        max_tokens=choice.max_tokens,
         system=_CLARIFY_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],
     )

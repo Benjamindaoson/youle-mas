@@ -185,10 +185,12 @@ async def _rerank_with_llm(
         f"挑最匹配的。"
     )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from app.adapters.model_router import pick_chat
+    choice = pick_chat(purpose="conductor_rerank", prefer_provider="anthropic")
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
     resp = await client.messages.create(
-        model=settings.ANTHROPIC_MODEL,
-        max_tokens=256,
+        model=choice.model,
+        max_tokens=choice.max_tokens,
         system=_RERANK_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],
     )

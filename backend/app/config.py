@@ -15,15 +15,21 @@ class Settings(BaseSettings):
     # True 时跳过 API Key 校验，所有模型调用走工程 fallback
     DEMO_MODE: bool = True
 
-    # ---- Anthropic（主编排模型）----
+    # ---- Anthropic（默认 chat / 编排 / vision）----
     ANTHROPIC_API_KEY: str | None = None
-    ANTHROPIC_MODEL: str = "claude-opus-4-7"
+    ANTHROPIC_MODEL: str = "claude-opus-4-7"           # 兜底默认（任何 purpose 没专属配置时用）
+    # Per-purpose 模型（V1 完成度，按 purpose 切不同模型）
+    ANTHROPIC_MODEL_CONDUCTOR: str = ""                 # 编排 / 重排 / 澄清；空 → ANTHROPIC_MODEL
+    ANTHROPIC_MODEL_INTENT: str = ""                    # 意图解析（短/快）
+    ANTHROPIC_MODEL_T: str = ""                         # T capability ReAct
+    ANTHROPIC_MODEL_VISION: str = ""                    # I/V capability 看图/看视频帧
 
-    # ---- DeepSeek（中文文本生成）----
+    # ---- DeepSeek（中文 / 推理 / 兜底）----
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL_PRO: str = "deepseek-chat"
-    DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"
+    DEEPSEEK_MODEL_PRO: str = "deepseek-chat"           # 写作主力（chat 模型）
+    DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"         # 快速分类 / fallback
+    DEEPSEEK_MODEL_REASONER: str = "deepseek-reasoner"  # 复杂推理（用于 conductor 备选）
 
     # ---- SiliconFlow（图片生成）----
     SILICONFLOW_API_KEY: str | None = None
