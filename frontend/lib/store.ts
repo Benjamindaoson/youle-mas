@@ -1849,24 +1849,20 @@ export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
   // 初始状态
-  currentGroupId: 'xhs',
+  currentGroupId: 'antiscam-video',
   selectedEmployeeId: 'chief',
   isDossierOpen: true,
-  
+
   groups: WORK_GROUPS,
-  
+
   messagesByGroup: {
-    xhs: getInitialMessages('xhs'),
-    bp: getInitialMessages('bp'),
-    launch: getInitialMessages('launch'),
     'antiscam-video': getInitialMessages('antiscam-video'),
+    'ecommerce-content': getInitialMessages('ecommerce-content'),
   },
 
   pipelineByGroup: {
-    xhs: getInitialPipeline('xhs'),
-    bp: getInitialPipeline('bp'),
-    launch: getInitialPipeline('launch'),
     'antiscam-video': getInitialPipeline('antiscam-video'),
+    'ecommerce-content': getInitialPipeline('ecommerce-content'),
   },
   
   isAiTyping: false,
