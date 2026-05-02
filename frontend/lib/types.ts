@@ -1300,25 +1300,19 @@ export const CAPABILITY_NAMES: Record<CapabilityType, string> = {
 
 // 工作群数据
 export const WORK_GROUPS: WorkGroup[] = [
-  { id: 'xhs', name: '小红书冷启动', emoji: '📕', hasActivity: true },
-  { id: 'bp', name: '融资 BP 冲刺', emoji: '💼' },
-  { id: 'launch', name: '5 月新品上市', emoji: '🚀', unreadCount: 3 },
-  {
-    id: 'youle-website-dev',
-    name: '官网开发组',
-    emoji: '🌐',
-    hasActivity: true,
-    members: [
-      { name: '晓晨', role: 'UI/UX 设计', initials: '晨', color: '#7C3AED' },
-      { name: '小磊', role: '前端开发', initials: '磊', color: '#0EA5E9' },
-    ],
-  },
   {
     id: 'antiscam-video',
-    name: '反诈视频制作组',
+    name: '反诈短视频制作群',
     emoji: '🛡️',
     hasActivity: true,
     memberRoles: ['writer', 'analyst', 'distributor', 'coder'],
+  },
+  {
+    id: 'ecommerce-content',
+    name: '电商内容制作群',
+    emoji: '🛒',
+    hasActivity: true,
+    memberRoles: ['writer', 'analyst', 'distributor', 'planner'],
   },
 ];
 

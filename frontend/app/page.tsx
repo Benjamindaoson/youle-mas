@@ -1,6 +1,7 @@
-import { redirect } from 'next/navigation';
+import { Messenger } from '@/components/messenger';
 
-/** 默认入口：九宫格 + 群聊的旧版工作台。新版主编排工作台见 `/v1`。 */
+/** 默认入口 — 三列 IM 风格工作台，锁死两个群聊。
+ *  V0 九角色 demo 仍保留在 /legacy；V1 主编排工作台在 /v1。 */
 export default function Home() {
-  redirect('/legacy');
+  return <Messenger />;
 }
