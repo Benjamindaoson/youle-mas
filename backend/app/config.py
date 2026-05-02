@@ -15,24 +15,30 @@ class Settings(BaseSettings):
     # True 时跳过 API Key 校验，所有模型调用走工程 fallback
     DEMO_MODE: bool = True
 
-    # ---- Anthropic（旗舰文本 + 推理；各「角色」留空表示与 ANTHROPIC_MODEL 相同）----
+    # ---- Anthropic（兜底默认 + per-purpose 路由；各字段留空 → 回落 ANTHROPIC_MODEL）----
     ANTHROPIC_API_KEY: str | None = None
-    ANTHROPIC_MODEL: str = "claude-opus-4-7"
-    # 主编排：意图 parse / clarify / skill 语义重排 / 分发器 LLM 选路
-    ANTHROPIC_MODEL_CONDUCTOR: str = ""
-    # V1 T 能力：ReAct + tool_use
-    ANTHROPIC_MODEL_CAPABILITY_TEXT: str = ""
-    # V0 九大角色单聊 stream
-    ANTHROPIC_MODEL_ROLE_CHAT: str = ""
+    ANTHROPIC_MODEL: str = "claude-opus-4-7"           # 兜底默认（任何 purpose 没专属配置时用）
 
+    # V1 ModelRouter per-purpose 模型（feat(router) c2d9277 引入）
+    ANTHROPIC_MODEL_CONDUCTOR: str = ""                 # 编排 / 重排 / 澄清
+    ANTHROPIC_MODEL_INTENT: str = ""                    # 意图解析（短/快）
+    ANTHROPIC_MODEL_T: str = ""                         # T capability ReAct
+    ANTHROPIC_MODEL_VISION: str = ""                    # I/V capability 看图/看视频帧
+
+    # 旧的 per-role 字段（PR #9 引入，T agent / V0 角色聊天还在用，保留向后兼容）
+    ANTHROPIC_MODEL_CAPABILITY_TEXT: str = ""
+    ANTHROPIC_MODEL_ROLE_CHAT: str = ""
     ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT: int = 8192
     ANTHROPIC_MAX_OUTPUT_TOKENS_ROLE_CHAT: int = 4096
 
-    # ---- DeepSeek（LangGraph/script 网关等 OpenAI-compat 路由）----
+    # ---- DeepSeek（中文 / 推理 / 兜底）----
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL_PRO: str = "deepseek-reasoner"
+    # PRO 默认 deepseek-chat：reasoner 把 reasoning 文本塞 content 导致短 JSON 截断
+    # （本仓库 backend/scripts/verify_deepseek.py 已验证 chat 可通过 ScriptSchema）
+    DEEPSEEK_MODEL_PRO: str = "deepseek-chat"
     DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"
+    DEEPSEEK_MODEL_REASONER: str = "deepseek-reasoner"  # 显式推理路径（conductor 备选）
     # 反诈脚本等长 JSON：`reasoning` 会占 completion，需留出正式输出篇幅
     DEEPSEEK_MAX_OUTPUT_TOKENS: int = 8192
 

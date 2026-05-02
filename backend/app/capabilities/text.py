@@ -192,19 +192,29 @@ async def _react_loop(
 
     一轮 = 模型可能选 1) 直接回答；2) 调一个或多个工具。
     工具结果回喂模型，下一轮模型再决定。最多 MAX_TOOL_TURNS 轮硬中断。
+
+    模型选择走 ModelRouter（purpose=capability_T）— 用户想接不同 LLM 时只
+    需要改 .env 的 ANTHROPIC_MODEL_T 字段，不需要改这里。
     """
     import anthropic  # noqa: WPS433
     from app.capabilities.text_tools import TOOL_DEFS, call_tool
+    from app.adapters.model_router import pick_chat
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    choice = pick_chat(purpose="capability_T", prefer_provider="anthropic")
+    if not choice.available:
+        # T ReAct 必须 Anthropic（tool_use 是 Anthropic 特有）；
+        # 无 key → 让上层 run() 走 _template_fallback
+        raise RuntimeError("anthropic not available for T ReAct")
+
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
     for turn in range(MAX_TOOL_TURNS + 1):
         # 最后一轮强制不再给 tools，逼模型给最终答案
         tools_arg = TOOL_DEFS if turn < MAX_TOOL_TURNS else None
         kwargs: dict[str, Any] = {
-            "model": settings.anthropic_model_capability_text,
-            "max_tokens": settings.ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT,
+            "model": choice.model,
+            "max_tokens": choice.max_tokens,
             "messages": messages,
         }
         if tools_arg:

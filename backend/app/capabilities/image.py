@@ -107,85 +107,41 @@ async def _placeholder(intent: Intent, save_dir: str) -> str:
     return await create_placeholder(text[:30], save_dir)
 
 
-def _is_vision_task(task: SkillStep) -> bool:
-    """判断这一步是"理解图"还是"生成图"。
+_REACT_KEYWORDS = (
+    # HEAD: 看图 / 改图相关
+    "看图", "理解", "改图", "调色", "测色", "审核", "review", "inspect",
+    # 并入 master 的 vision 关键词，覆盖更广（feat(I-agent) ReAct 也能做单次理解）
+    "分析", "审稿", "评估", "rate", "understand", "analyze", "describe",
+)
 
-    规则：task.task / outputs 含"理解 / 分析 / 看图 / 审稿 / understand /
-    analyze / review" 关键词 → vision；否则 → 生成。
+
+def _should_use_react(task: SkillStep, upstream: list[Any]) -> bool:
+    """判断是否走 ReAct（理解/改图）路径而非生成路径。
+
+    条件：has_anthropic + task.task 含理解类关键词 + upstream 已经有图。
     """
-    blob = (task.task or "") + " " + " ".join(task.outputs or [])
-    blob = blob.lower()
-    for kw in ("理解", "分析", "看图", "审稿", "评估", "rate",
-               "understand", "analyze", "review", "describe"):
-        if kw in blob:
-            return True
+    if not settings.has_anthropic:
+        return False
+    text = (task.task or "").lower()
+    if not any(kw in text for kw in _REACT_KEYWORDS):
+        return False
+    # 找一张上游图
+    for entry in upstream or []:
+        for art in (entry.get("artifacts") or []):
+            if (art.get("artifact_type") or "").startswith("image"):
+                return True
     return False
 
 
-def _extract_image_paths_from_upstream(upstream: list[Any]) -> list[str]:
-    """从上游产出里抽 image artifact 的 file_path（vision 任务用）。"""
-    paths: list[str] = []
-    for entry in upstream or []:
-        for art in (entry.get("artifacts") or []):
-            atype = (art.get("artifact_type") or "").lower()
-            if atype.startswith("image"):
-                fp = art.get("file_path")
-                if fp and os.path.isfile(fp):
-                    paths.append(fp)
-    return paths
+def _is_vision_task(task: SkillStep) -> bool:
+    """纯关键词分类器：task.task / outputs 含理解类词 → True。
 
-
-async def _run_vision(
-    task: SkillStep,
-    intent: Intent,
-    upstream: list[Any],
-    session_id: str,
-) -> AsyncIterator[dict]:
-    """图理解：对上游图片或 intent 中提到的图片调 Anthropic vision。"""
-    images = _extract_image_paths_from_upstream(upstream)
-    if not images:
-        yield {"type": "chunk", "capability": "I",
-               "text": "[I-vision] 上游没有图片可分析；本步骤跳过"}
-        return
-    instruction = (task.prompt_template or task.task or
-                   "请分析这张图，给出 3-5 条具体观察 + 1 条改进建议。"
-                   ).replace("{subject}", intent.subject or "")
-
-    if not settings.has_anthropic:
-        # DEMO 模板兜底
-        for i, img in enumerate(images):
-            text = (f"[DEMO 模板·配 ANTHROPIC_API_KEY 后切换为真 vision]\n\n"
-                    f"图 {i+1} 占位分析:\n"
-                    f"- 主体清晰度：可接受\n"
-                    f"- 构图：中规中矩\n"
-                    f"- 改进建议：增强光线层次")
-            yield {"type": "chunk", "capability": "I", "text": text}
-            yield {
-                "type": "artifact", "capability": "I",
-                "artifact_type": "image-analysis",
-                "title": f"{task.task or '图分析'} #{i+1}",
-                "content_inline": text,
-                "session_id": session_id,
-            }
-        return
-
-    async with ModelGateway(settings) as gw:
-        for i, img in enumerate(images):
-            yield {"type": "chunk", "capability": "I",
-                   "text": f"分析图片 {i+1}/{len(images)}..."}
-            text = await gw.vision("image.understand",
-                                    {"image_path": img, "instruction": instruction})
-            if not text:
-                text = "[vision 调用失败，请检查 ANTHROPIC_API_KEY]"
-            yield {"type": "chunk", "capability": "I", "text": text}
-            yield {
-                "type": "artifact", "capability": "I",
-                "artifact_type": "image-analysis",
-                "title": f"{task.task or '图分析'} #{i+1}",
-                "content_inline": text,
-                "file_path": img,  # 引用被分析的图
-                "session_id": session_id,
-            }
+    向后兼容 PR #9 的测试（test_v1_phase5_vision_skills_onepass.py）；
+    实际路由在 run() 里走 _should_use_react（额外要求 upstream 有图）。
+    """
+    blob = (task.task or "") + " " + " ".join(task.outputs or [])
+    blob = blob.lower()
+    return any(kw in blob for kw in _REACT_KEYWORDS)
 
 
 async def run(
@@ -196,16 +152,22 @@ async def run(
 ) -> AsyncIterator[dict]:
     """执行一步图能力任务。
 
-    路由:
-      - task 含"理解/分析"等关键词 → 走 vision (Anthropic)
-      - 否则走生成 (4 级 fallback)
+    两条路径：
+    - **ReAct 理解/改图**：上游有图 + task 含"看/改/调色/分析/审稿"等关键词 → 走 vision tool_use
+    - **生成**（默认）：无上游图或 task 是生成类 → 4 级 fallback 出图
     """
-    if _is_vision_task(task):
-        async for ev in _run_vision(task, intent, upstream, session_id):
-            yield ev
-        return
 
     save_dir = _save_dir(session_id)
+
+    if _should_use_react(task, upstream):
+        try:
+            async for ev in _react_loop(task=task, upstream=upstream,
+                                         session_id=session_id):
+                yield ev
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.warning("i_agent_react_failed_fallback_generate", error=str(e))
+            # 失败回退到生成路径
 
     # Step 1: 取上游 T agent 给的 prompt 数组（电商主图 skill 模式）
     prompts = _extract_prompts_from_upstream(upstream)
@@ -249,3 +211,106 @@ async def run(
         "type": "chunk", "capability": "I",
         "text": f"完成：{len(produced_paths)} 张图保存在 {save_dir}",
     }
+
+
+# ============================ ReAct 路径（理解/改图）============================
+
+
+_MAX_TOOL_TURNS = 4
+
+
+async def _react_loop(*, task: SkillStep, upstream: list[Any],
+                       session_id: str) -> AsyncIterator[dict]:
+    """vision tool_use 循环：让 I agent 自主选 inspect / resize / palette。"""
+    import anthropic  # noqa: WPS433
+    from app.adapters.model_router import pick_chat
+    from app.capabilities.image_tools import TOOL_DEFS, call_tool
+
+    choice = pick_chat(purpose="capability_I_describe", prefer_provider="anthropic")
+    if not choice.available:
+        raise RuntimeError("anthropic not available for I ReAct")
+
+    # 给 LLM 一份上游已有图片的清单（便于它决定调哪个工具）
+    img_paths = []
+    for entry in upstream or []:
+        for art in (entry.get("artifacts") or []):
+            if (art.get("artifact_type") or "").startswith("image"):
+                fp = art.get("file_path")
+                if fp:
+                    img_paths.append(fp)
+
+    prompt = (
+        f"任务：{task.task}\n\n"
+        f"上游已有 {len(img_paths)} 张图，路径：\n"
+        + "\n".join(f"  - {p}" for p in img_paths[:5])
+        + "\n\n你可以用 image_inspect 看图、image_resize 改尺寸、palette_extract "
+          "抽主色。完成后给一段中文总结（≤200 字）。"
+    )
+
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+
+    yield {"type": "chunk", "capability": "I", "text": "[I ReAct] 启动 vision 分析..."}
+
+    summary_text = ""
+    for turn in range(_MAX_TOOL_TURNS + 1):
+        tools_arg = TOOL_DEFS if turn < _MAX_TOOL_TURNS else None
+        kwargs: dict[str, Any] = {
+            "model": choice.model,
+            "max_tokens": choice.max_tokens,
+            "messages": messages,
+        }
+        if tools_arg:
+            kwargs["tools"] = tools_arg
+
+        resp = await client.messages.create(**kwargs)
+        tool_uses: list[dict[str, Any]] = []
+        round_text = ""
+        for block in resp.content:
+            if block.type == "text":
+                round_text += block.text
+            elif block.type == "tool_use":
+                tool_uses.append({"id": block.id, "name": block.name,
+                                   "input": dict(block.input or {})})
+
+        if round_text:
+            summary_text += round_text
+            yield {"type": "chunk", "capability": "I", "text": round_text}
+
+        if not tool_uses:
+            break
+
+        messages.append({"role": "assistant", "content": resp.content})
+
+        tool_results: list[dict[str, Any]] = []
+        for tu in tool_uses:
+            yield {"type": "tool_call", "capability": "I",
+                   "tool": tu["name"], "input": tu["input"], "turn": turn + 1}
+            result = await call_tool(tu["name"], tu["input"])
+            yield {"type": "tool_result", "capability": "I",
+                   "tool": tu["name"], "result": result, "turn": turn + 1}
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tu["id"],
+                "content": _serialize_tool_result(result),
+            })
+        messages.append({"role": "user", "content": tool_results})
+
+    # ReAct 结束 → 把总结作为 markdown artifact 落盘
+    yield {
+        "type": "artifact",
+        "capability": "I",
+        "artifact_type": "markdown",
+        "title": task.task or "I 看图分析",
+        "content_inline": summary_text or "（无文本输出）",
+        "session_id": session_id,
+    }
+
+
+def _serialize_tool_result(result: Any) -> str:
+    """tool_result content 必须是字符串。"""
+    import json
+    try:
+        return json.dumps(result, ensure_ascii=False)[:8000]
+    except (TypeError, ValueError):
+        return str(result)[:8000]

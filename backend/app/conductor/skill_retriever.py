@@ -111,10 +111,12 @@ async def _confirm_with_llm(
         f"用户的真实意图是要执行这个 skill 吗？"
     )
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    from app.adapters.model_router import pick_chat
+    choice = pick_chat(purpose="conductor_confirm", prefer_provider="anthropic")
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
     resp = await client.messages.create(
-        model=settings.anthropic_model_conductor,
-        max_tokens=256,
+        model=choice.model,
+        max_tokens=choice.max_tokens,
         system=_CONFIRM_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],
     )

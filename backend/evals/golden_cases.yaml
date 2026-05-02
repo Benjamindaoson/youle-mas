@@ -1,0 +1,243 @@
+# V1 Golden Cases — 30 条端到端预期，给 scripts/run_evals.py 用
+# 每条 case 检查一个具体行为，pass = 实际输出与 expectations 一致
+#
+# kind 枚举：
+#   skill_match   — 调 skill_match(input) 应得到指定 skill_id (或 null 表示不命中)
+#   intent_parse  — 调 parse_intent(input) 应得到指定字段
+#   conduct_smoke — 跑 conductor.conduct() 应至少产出指定事件类型
+
+cases:
+
+  # ===== Skill 召回（10 条）=====
+
+  - id: skill_001
+    kind: skill_match
+    description: 反诈视频应命中 anti_scam_video
+    input: "做一支反诈短视频"
+    expect_skill_id: anti_scam_video
+
+  - id: skill_002
+    kind: skill_match
+    description: 电商主图应命中 ecommerce_main_image
+    input: "我要做电商主图"
+    expect_skill_id: ecommerce_main_image
+
+  - id: skill_003
+    kind: skill_match
+    description: 小红书爆款标题应命中 xiaohongshu_hook_title
+    input: "帮我写 5 个小红书爆款标题"
+    expect_skill_id: xiaohongshu_hook_title
+
+  - id: skill_004
+    kind: skill_match
+    description: '"小红书冷启动方案" 含"方案"否决词，不应误命中标题 skill'
+    input: "做一份小红书冷启动方案"
+    expect_skill_id: null
+
+  - id: skill_005
+    kind: skill_match
+    description: '"详情页文案" 含"文案"否决词，不应误命中电商主图 skill'
+    input: "电商详情页文案要怎么写"
+    expect_skill_id: null
+
+  - id: skill_006
+    kind: skill_match
+    description: 通用闲聊不应命中任何 skill
+    input: "你好啊"
+    expect_skill_id: null
+
+  - id: skill_007
+    kind: skill_match
+    description: '"小红书爆款标题"必须命中阈值 (≥2 关键词)'
+    input: "小红书 爆款 标题 起一个"
+    expect_skill_id: xiaohongshu_hook_title
+
+  - id: skill_008
+    kind: skill_match
+    description: 防诈视频同义词应命中 anti_scam_video
+    input: "做防诈视频"
+    expect_skill_id: anti_scam_video
+
+  - id: skill_009
+    kind: skill_match
+    description: 商品图应命中 ecommerce_main_image
+    input: "拍一组商品图"
+    expect_skill_id: ecommerce_main_image
+
+  - id: skill_010
+    kind: skill_match
+    description: 'anti-scam 英文也应命中'
+    input: "make an anti-scam video"
+    expect_skill_id: anti_scam_video
+
+  # ===== 意图解析（10 条）=====
+
+  - id: intent_001
+    kind: intent_parse
+    description: 公众号 → vertical=content + deliverable=text
+    input: "帮我写公众号开头"
+    expect:
+      vertical: content
+      deliverable_type: text
+
+  - id: intent_002
+    kind: intent_parse
+    description: 电商主图 → vertical=ecommerce + deliverable=image
+    input: "我要做产品主图"
+    expect:
+      vertical: ecommerce
+      deliverable_type: image
+
+  - id: intent_003
+    kind: intent_parse
+    description: 反诈视频 → vertical=finance + deliverable=video
+    input: "做一支反诈短视频"
+    expect:
+      vertical: finance
+      deliverable_type: video
+
+  - id: intent_004
+    kind: intent_parse
+    description: 品牌 KV 海报 → vertical=marketing + deliverable=image
+    input: "做一张新品发布海报"
+    expect:
+      vertical: marketing
+      deliverable_type: image
+
+  - id: intent_005
+    kind: intent_parse
+    description: 周报 PPT → deliverable=doc
+    input: "整理一份周报 PPT"
+    expect:
+      deliverable_type: doc
+
+  - id: intent_006
+    kind: intent_parse
+    description: 模糊需求应触发 clarify (confidence < 0.7)
+    input: "搞一下"
+    expect_low_confidence: true
+
+  - id: intent_007
+    kind: intent_parse
+    description: 有缺失槽位应进 missing_slots
+    input: "帮我做点什么"
+    expect_has_missing_slots: true
+
+  - id: intent_008
+    kind: intent_parse
+    description: 小红书笔记 → vertical=content
+    input: "写一篇小红书种草笔记"
+    expect:
+      vertical: content
+
+  - id: intent_009
+    kind: intent_parse
+    description: 抖音文案 → vertical=content + deliverable=text
+    input: "帮我写一段抖音文案"
+    expect:
+      vertical: content
+      deliverable_type: text
+
+  - id: intent_010
+    kind: intent_parse
+    description: KOL 投放方案 → vertical=marketing
+    input: "做一份 KOL 投放方案"
+    expect:
+      vertical: marketing
+
+  # ===== Conductor smoke（10 条 — 检查 SSE 事件流出现）=====
+
+  - id: conduct_001
+    kind: conduct_smoke
+    description: 清晰需求应至少出 intent_parsed + skill_selected
+    input: "帮我写 5 个小红书爆款标题"
+    expect_event_types:
+      - start
+      - intent_parsed
+      - skill_selected
+
+  - id: conduct_002
+    kind: conduct_smoke
+    description: 模糊需求应触发 clarify_required
+    input: "搞一下"
+    expect_event_types:
+      - start
+      - intent_parsed
+      - clarify_required
+
+  - id: conduct_003
+    kind: conduct_smoke
+    description: |
+      反诈短视频是 runner-based skill，conductor 主动剔除（让 routes.py /chat/team
+      走 V0 LangGraph HITL 优化版）。所以 conductor 流里应见 _fallback_role_team。
+    input: "做反诈短视频"
+    expect_event_types_any:
+      - _fallback_role_team
+      - skill_selected
+
+  - id: conduct_004
+    kind: conduct_smoke
+    description: 电商主图走 skill_selected + agent_start (declarative DAG)
+    input: "我要做电商主图，产品是面霜"
+    expect_event_types:
+      - start
+      - intent_parsed
+      - skill_selected
+      - agent_start
+
+  - id: conduct_005
+    kind: conduct_smoke
+    description: 小红书标题走完整流程到 deliverable
+    input: "帮我写小红书标题，主题是新茶饮"
+    expect_event_types:
+      - start
+      - intent_parsed
+      - skill_selected
+      - agent_start
+      - agent_done
+      - deliverable
+      - done
+
+  - id: conduct_006
+    kind: conduct_smoke
+    description: skill 库无匹配应返回 error
+    input: "帮我下载一个游戏"
+    expect_event_types_any:
+      - error
+      - clarify_required
+
+  - id: conduct_007
+    kind: conduct_smoke
+    description: 通用文字写作应走 declarative skill
+    input: "帮我写一段公众号开头"
+    expect_event_types:
+      - start
+      - intent_parsed
+
+  - id: conduct_008
+    kind: conduct_smoke
+    description: |
+      "做一张商品图" 主语模糊（subject 抽不出），可能触发 clarify；
+      或者关键词命中 ecom skill。两条路径都合理。
+    input: "做一张商品图"
+    expect_event_types_any:
+      - skill_selected
+      - clarify_required
+
+  - id: conduct_009
+    kind: conduct_smoke
+    description: 营销品牌物料应走至少到 intent_parsed
+    input: "做一组双11营销 banner"
+    expect_event_types:
+      - start
+      - intent_parsed
+
+  - id: conduct_010
+    kind: conduct_smoke
+    description: |
+      反诈视频是 runner-based，conductor 剔除让 routes.py 走 V0 优化路径。
+      所以 conductor 流里应见 _fallback_role_team（与 conduct_003 一致）。
+    input: "弄个反诈警示视频"
+    expect_event_types_any:
+      - _fallback_role_team
+      - skill_selected

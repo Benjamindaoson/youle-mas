@@ -163,8 +163,10 @@ _INTENT_SYSTEM = """你是意图解析器。把用户的话解析成结构化 JS
 
 async def _parse_with_anthropic(user_text: str, history: list[dict]) -> Intent:
     import anthropic  # noqa: WPS433
+    from app.adapters.model_router import pick_chat
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    choice = pick_chat(purpose="conductor_intent", prefer_provider="anthropic")
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
     messages = []
     # 把最近 4 条历史塞进去帮助消歧
     for h in history[-4:]:
@@ -173,8 +175,8 @@ async def _parse_with_anthropic(user_text: str, history: list[dict]) -> Intent:
     messages.append({"role": "user", "content": user_text})
 
     resp = await client.messages.create(
-        model=settings.anthropic_model_conductor,
-        max_tokens=512,
+        model=choice.model,
+        max_tokens=choice.max_tokens,
         system=_INTENT_SYSTEM,
         messages=messages,
     )
