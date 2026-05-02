@@ -333,7 +333,7 @@ async def _react_loop(*, task: SkillStep, upstream: list[Any],
           "完成后给一段中文总结（≤300 字）。"
     )
 
-    client = anthropic.AsyncAnthropic(api_key=choice.api_key)
+    client = anthropic.AsyncAnthropic(api_key=choice.api_key, base_url=choice.api_base or None)
     messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
 
     yield {"type": "chunk", "capability": "V", "text": "[V ReAct] 启动视频分析..."}

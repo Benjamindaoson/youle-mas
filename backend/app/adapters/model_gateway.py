@@ -304,7 +304,7 @@ class ModelGateway:
             b64 = base64.b64encode(raw).decode("ascii")
 
             import anthropic  # noqa: WPS433
-            client = anthropic.AsyncAnthropic(api_key=self.settings.ANTHROPIC_API_KEY)
+            client = anthropic.AsyncAnthropic(api_key=self.settings.ANTHROPIC_API_KEY, base_url=self.settings.ANTHROPIC_BASE_URL or None)
             t0 = time.monotonic()
             resp = await client.messages.create(
                 model=self.settings.anthropic_model_capability_text,

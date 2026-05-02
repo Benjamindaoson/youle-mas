@@ -151,7 +151,7 @@ def pick_chat(
                 provider="anthropic",
                 model=_anthropic_model_for(purpose),
                 api_key=settings.ANTHROPIC_API_KEY or "",
-                api_base="",
+                api_base=settings.ANTHROPIC_BASE_URL or "",
                 max_tokens=spec["max_tokens"],
                 temperature=spec["temperature"],
                 purpose=purpose,

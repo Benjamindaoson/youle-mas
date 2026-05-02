@@ -211,7 +211,7 @@ async def _stream_anthropic(
             msgs.append({"role": role, "content": content})
     msgs.append({"role": "user", "content": message})
 
-    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+    client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY, base_url=settings.ANTHROPIC_BASE_URL or None)
     async with client.messages.stream(
         model=settings.anthropic_model_role_chat,
         max_tokens=settings.ANTHROPIC_MAX_OUTPUT_TOKENS_ROLE_CHAT,
