@@ -1,9 +1,15 @@
 """TDD: ModelGateway fallback tests."""
 import pytest
 import pytest_asyncio
-from app.config import settings
+from app.config import Settings, settings
 from app.adapters.model_gateway import ModelGateway
 from app.schemas.news import NewsItem
+
+
+@pytest.fixture(autouse=True)
+def _no_live_deepseek_in_gateway_tests(monkeypatch):
+    """本文件只测离线 fallback：避免载入开发者本机 `.env` 里的 DEEPSEEK_KEY 成真请求。"""
+    monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", None, raising=False)
 
 
 @pytest_asyncio.fixture
@@ -76,6 +82,25 @@ async def test_music_always_returns_none(gateway):
     """Music generation always returns None in V0."""
     result = await gateway.music("music.generate", {})
     assert result is None
+
+
+def test_image_response_url_accepts_openai_or_siliconflow_shape():
+    assert ModelGateway._image_response_url({"data": [{"url": "http://a"}]}) == "http://a"
+    assert ModelGateway._image_response_url({"images": [{"url": "http://b"}]}) == "http://b"
+    assert ModelGateway._image_response_url({"x": []}) is None
+
+
+def test_siliconflow_image_payload_for_flux2_pro():
+    s = Settings(
+        IMAGE_MODEL="black-forest-labs/FLUX.2-pro",
+        IMAGE_SIZE="576x1024",
+    )
+    gw = ModelGateway(s)
+    b = gw._siliconflow_image_payload("poster")
+    assert b["prompt"] == "poster"
+    assert b["model"].endswith("FLUX.2-pro")
+    assert b["image_size"] == "576x1024"
+    assert b["output_format"] == "png"
 
 
 async def test_template_script_validates(gateway):

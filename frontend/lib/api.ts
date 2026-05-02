@@ -10,18 +10,27 @@
  * 函数签名与真实后端版严格一致，上层组件（employee-chat / group-chat /
  * dossier / artifact-picker / group-dashboard）无需任何改动。
  *
- * 如果 NEXT_PUBLIC_AGENT_SERVER_URL 被显式设为非空，仍可切回真实后端模式
- *（保留逃生口，方便本地连 server 调试）。
+ * 若在 `frontend/.env.local` 配置了 `NEXT_PUBLIC_AGENT_SERVER_URL` 则使用该值；
+ * **`pnpm dev` 且未配置时默认 `http://127.0.0.1:8001`**（可设 `NEXT_PUBLIC_AGENT_MOCK_ONLY=1` 关闭以继续纯 mock）。
  */
 
-import { AGENT_CONFIGS, type RoleId } from './types';
+import {
+  getAgentApiBase,
+  USE_REAL_AGENT_BACKEND as USE_REAL_BACKEND,
+} from './agent-server-base';
 
-const REAL_API_BASE =
-  typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_AGENT_SERVER_URL : '';
+/** 配置了有效后端 Base（env 或非生产 mock）。 */
+export { IS_REAL_AGENT_SERVER_BACKEND } from './agent-server-base';
 
-/** 是否走真实后端。空字符串 / undefined → mock 模式（部署 demo 默认）。 */
-const USE_REAL_BACKEND =
-  typeof REAL_API_BASE === 'string' && REAL_API_BASE.length > 0;
+/** 跨域/未启动后端时浏览器的典型报错，附排查句。 */
+function formatBackendFetchError(message: string): string {
+  const tip =
+    '请先启动后端：`cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 8001`。从本环回域名打开前端时，请求会先走同源 `/api/youle-backend`（Next rewrite）；若仍 Failed to fetch，多为后端未监听或 **`YOULE_BACKEND_INTERNAL_URL`/端口** 与本机后端不一致；要浏览器直连可设 `NEXT_PUBLIC_AGENT_SERVER_PROXY=false`。';
+  if (/Failed to fetch|NetworkError|Load failed|fetch failed|networkerror/i.test(message)) {
+    return `${message} ${tip}`;
+  }
+  return message;
+}
 
 /** 后端 agent 上线状态（mock 默认全员可对话）。 */
 export const AVAILABLE_AGENTS = new Set<string>([
@@ -548,7 +557,7 @@ async function realStreamChat(
 ): Promise<void> {
   let resp: Response;
   try {
-    resp = await fetch(`${REAL_API_BASE}/chat`, {
+    resp = await fetch(`${getAgentApiBase()}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -561,8 +570,8 @@ async function realStreamChat(
     });
   } catch (e: unknown) {
     if (e instanceof DOMException && e.name === 'AbortError') return;
-    const msg = e instanceof Error ? e.message : String(e);
-    onEvent({ type: 'error', message: `连不上后端（${REAL_API_BASE}）：${msg}` });
+    const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
+    onEvent({ type: 'error', message: `连不上后端（${getAgentApiBase()}）：${msg}` });
     return;
   }
   if (!resp.ok) {
@@ -685,7 +694,7 @@ export async function streamTeamChat(
   if (USE_REAL_BACKEND) {
     let resp: Response;
     try {
-      resp = await fetch(`${REAL_API_BASE}/chat/team`, {
+      resp = await fetch(`${getAgentApiBase()}/chat/team`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -699,8 +708,8 @@ export async function streamTeamChat(
       });
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === 'AbortError') return;
-      const msg = e instanceof Error ? e.message : String(e);
-      onEvent({ type: 'error', message: `连不上后端（${REAL_API_BASE}）：${msg}` });
+      const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
+      onEvent({ type: 'error', message: `连不上后端（${getAgentApiBase()}）：${msg}` });
       return;
     }
     if (!resp.ok || !resp.body) {
@@ -872,7 +881,7 @@ export async function streamTeamResume(
   const tid = encodeURIComponent(params.threadId);
   let resp: Response;
   try {
-    resp = await fetch(`${REAL_API_BASE}/chat/team/resume/${tid}`, {
+    resp = await fetch(`${getAgentApiBase()}/chat/team/resume/${tid}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -883,7 +892,7 @@ export async function streamTeamResume(
     });
   } catch (e: unknown) {
     if (e instanceof DOMException && e.name === 'AbortError') return;
-    const msg = e instanceof Error ? e.message : String(e);
+    const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
     onEvent({ type: 'error', message: `resume 请求失败：${msg}` });
     return;
   }
@@ -903,7 +912,7 @@ export async function listArtifacts(
   sessionId: string,
 ): Promise<{ session_id: string; created_at: string; artifacts: ArtifactManifest[] }> {
   if (USE_REAL_BACKEND) {
-    const resp = await fetch(`${REAL_API_BASE}/artifacts/${encodeURIComponent(sessionId)}`);
+    const resp = await fetch(`${getAgentApiBase()}/artifacts/${encodeURIComponent(sessionId)}`);
     if (!resp.ok) return { session_id: sessionId, created_at: '', artifacts: [] };
     return resp.json();
   }
@@ -922,7 +931,7 @@ export async function listAllArtifacts(
   limit = 200,
 ): Promise<Array<ArtifactManifest & { session_id: string }>> {
   if (USE_REAL_BACKEND) {
-    const resp = await fetch(`${REAL_API_BASE}/artifacts?limit=${limit}`);
+    const resp = await fetch(`${getAgentApiBase()}/artifacts?limit=${limit}`);
     if (!resp.ok) return [];
     const data = await resp.json();
     return data.items ?? [];
@@ -946,7 +955,7 @@ export async function listArtifactsByAgent(
 ): Promise<{ items: Array<ArtifactManifest & { session_id: string }> }> {
   if (USE_REAL_BACKEND) {
     const resp = await fetch(
-      `${REAL_API_BASE}/artifacts/by-agent/${encodeURIComponent(agentId)}?limit=${limit}`,
+      `${getAgentApiBase()}/artifacts/by-agent/${encodeURIComponent(agentId)}?limit=${limit}`,
     );
     if (!resp.ok) return { items: [] };
     return resp.json();
@@ -962,7 +971,7 @@ export async function fetchArtifact(
 ): Promise<string | null> {
   if (USE_REAL_BACKEND) {
     const resp = await fetch(
-      `${REAL_API_BASE}/artifacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(filename)}`,
+      `${getAgentApiBase()}/artifacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(filename)}`,
     );
     if (!resp.ok) return null;
     const data = await resp.json();
@@ -975,7 +984,7 @@ export async function fetchArtifact(
 
 export function artifactDownloadUrl(sessionId: string, filename: string): string {
   if (USE_REAL_BACKEND) {
-    return `${REAL_API_BASE}/artifacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(filename)}/download`;
+    return `${getAgentApiBase()}/artifacts/${encodeURIComponent(sessionId)}/${encodeURIComponent(filename)}/download`;
   }
   // mock 模式：用 data: URL 直接吐文本内容（适合 markdown/code/json）
   const list = ARTIFACTS_BY_SESSION.get(sessionId) ?? [];
@@ -993,7 +1002,7 @@ export async function getArchiveStatus(
   if (USE_REAL_BACKEND) {
     try {
       const resp = await fetch(
-        `${REAL_API_BASE}/chat/archive/${encodeURIComponent(sessionId)}`,
+        `${getAgentApiBase()}/chat/archive/${encodeURIComponent(sessionId)}`,
       );
       if (!resp.ok) return { archived: false };
       const data = await resp.json();
@@ -1011,7 +1020,7 @@ export async function archiveSession(
 ): Promise<ArchiveSnapshot | null> {
   if (USE_REAL_BACKEND) {
     const resp = await fetch(
-      `${REAL_API_BASE}/chat/archive/${encodeURIComponent(sessionId)}`,
+      `${getAgentApiBase()}/chat/archive/${encodeURIComponent(sessionId)}`,
       { method: 'POST' },
     );
     if (!resp.ok) return null;
@@ -1032,7 +1041,7 @@ export async function archiveSession(
 
 export async function unarchiveSession(sessionId: string): Promise<void> {
   if (USE_REAL_BACKEND) {
-    await fetch(`${REAL_API_BASE}/chat/archive/${encodeURIComponent(sessionId)}`, {
+    await fetch(`${getAgentApiBase()}/chat/archive/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
     });
     return;
@@ -1042,7 +1051,7 @@ export async function unarchiveSession(sessionId: string): Promise<void> {
 
 export async function listAgents(): Promise<AgentInfo[]> {
   if (USE_REAL_BACKEND) {
-    const resp = await fetch(`${REAL_API_BASE}/agents`);
+    const resp = await fetch(`${getAgentApiBase()}/agents`);
     if (!resp.ok) return [];
     const data = await resp.json();
     return data.agents ?? [];
@@ -1057,7 +1066,7 @@ export async function listAgents(): Promise<AgentInfo[]> {
 
 export async function getAuth(sessionId: string): Promise<AuthLevel> {
   if (USE_REAL_BACKEND) {
-    const resp = await fetch(`${REAL_API_BASE}/auth/${encodeURIComponent(sessionId)}`);
+    const resp = await fetch(`${getAgentApiBase()}/auth/${encodeURIComponent(sessionId)}`);
     if (!resp.ok) return 'L0';
     const data = await resp.json();
     return (data.level as AuthLevel) ?? 'L0';
@@ -1067,7 +1076,7 @@ export async function getAuth(sessionId: string): Promise<AuthLevel> {
 
 export async function setAuth(sessionId: string, level: AuthLevel): Promise<AuthLevel> {
   if (USE_REAL_BACKEND) {
-    const resp = await fetch(`${REAL_API_BASE}/auth/${encodeURIComponent(sessionId)}`, {
+    const resp = await fetch(`${getAgentApiBase()}/auth/${encodeURIComponent(sessionId)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ level }),
@@ -1147,8 +1156,16 @@ export type V1ConductEvent =
 /** 列出后端注册的所有 skill。Mock 模式下返回 demo 条目以便 UI 渲染。 */
 export async function listV1Skills(): Promise<V1Skill[]> {
   if (USE_REAL_BACKEND) {
-    const resp = await fetch(`${REAL_API_BASE}/v1/skills`);
-    if (!resp.ok) return [];
+    let resp: Response;
+    try {
+      resp = await fetch(`${getAgentApiBase()}/v1/skills`);
+    } catch (e: unknown) {
+      const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
+      throw new Error(`无法加载 /v1/skills：${msg}`);
+    }
+    if (!resp.ok) {
+      throw new Error(`GET /v1/skills HTTP ${resp.status}`);
+    }
     const data = await resp.json();
     return (data.items ?? []) as V1Skill[];
   }
@@ -1205,46 +1222,55 @@ export async function streamV1Conduct(
     return;
   }
 
-  const resp = await fetch(`${REAL_API_BASE}/v1/conduct`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      message: params.message,
-      session_id: params.sessionId,
-      clarify_answers: params.clarifyAnswers,
-    }),
-    signal,
-  });
-
-  if (!resp.ok || !resp.body) {
-    onEvent({
-      type: 'error',
-      message: `连不上 V1 Conductor（${REAL_API_BASE}/v1/conduct）：HTTP ${resp.status}`,
+  try {
+    const resp = await fetch(`${getAgentApiBase()}/v1/conduct`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: params.message,
+        session_id: params.sessionId,
+        clarify_answers: params.clarifyAnswers,
+      }),
+      signal,
     });
-    return;
-  }
 
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+    if (!resp.ok || !resp.body) {
+      onEvent({
+        type: 'error',
+        message: `连不上 V1 Conductor（${getAgentApiBase()}/v1/conduct）：HTTP ${resp.status}`,
+      });
+      return;
+    }
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
 
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop() ?? '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    for (const frame of frames) {
-      const line = frame.trim();
-      if (!line.startsWith('data: ')) continue;
-      try {
-        const ev = JSON.parse(line.slice(6)) as V1ConductEvent;
-        onEvent(ev);
-      } catch {
-        // 忽略无法解析的帧
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() ?? '';
+
+      for (const frame of frames) {
+        const line = frame.trim();
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const ev = JSON.parse(line.slice(6)) as V1ConductEvent;
+          onEvent(ev);
+        } catch {
+          // 忽略无法解析的帧
+        }
       }
     }
+  } catch (e: unknown) {
+    if (e instanceof DOMException && e.name === 'AbortError') return;
+    const msg = formatBackendFetchError(e instanceof Error ? e.message : String(e));
+    onEvent({
+      type: 'error',
+      message: `V1 Conductor 请求失败（${getAgentApiBase()}）：${msg}`,
+    });
   }
 }

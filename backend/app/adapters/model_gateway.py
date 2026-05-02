@@ -19,6 +19,9 @@ from app.errors import GatewayError
 from app.logging_config import logger
 
 
+_DEFAULT_IMAGE_PROMPT = "professional illustration, clean composition"
+
+
 class ModelGateway:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -59,6 +62,65 @@ class ModelGateway:
                      latency_ms=int((time.monotonic() - t0) * 1000))
         return script
 
+    def _siliconflow_image_payload(self, prompt: str) -> dict[str, object]:
+        """按 SiliconFlow `POST /images/generations` schema 拼装 body（字段因模型而异）。"""
+        raw = self.settings.IMAGE_MODEL
+        p = prompt.strip() or _DEFAULT_IMAGE_PROMPT
+        size = self.settings.IMAGE_SIZE.strip() or "768x1024"
+
+        core: dict[str, object] = {"model": raw, "prompt": p}
+
+        if "FLUX.2-pro" in raw:
+            return {
+                **core,
+                "image_size": size,
+                "output_format": "png",
+            }
+        if "FLUX.2-flex" in raw:
+            steps = max(1, min(50, int(self.settings.IMAGE_INFERENCE_STEPS)))
+            return {
+                **core,
+                "image_size": size,
+                "num_inference_steps": steps,
+                "output_format": "png",
+            }
+        if "FLUX.1-dev" in raw:
+            steps = max(1, min(30, int(self.settings.IMAGE_INFERENCE_STEPS)))
+            return {
+                **core,
+                "image_size": size,
+                "num_inference_steps": steps,
+            }
+        if "FLUX.1-schnell" in raw:
+            return {
+                **core,
+                "image_size": size,
+            }
+        return {**core, "image_size": size}
+
+    @staticmethod
+    def _image_response_url(data: dict) -> str | None:
+        """兼容 OpenAI 风格 `data[]` 与 SiliconFlow `images[]`。"""
+        items = data.get("data")
+        if isinstance(items, list) and items:
+            u = items[0].get("url")
+            return str(u) if u else None
+        ims = data.get("images")
+        if isinstance(ims, list) and ims:
+            u = ims[0].get("url")
+            return str(u) if u else None
+        return None
+
+    @staticmethod
+    def _deepseek_assistant_content_text(message: object) -> str:
+        """从 DeepSeek(OpenAI-compat) choices[0].message 取可读正文。"""
+        if not isinstance(message, dict):
+            return ""
+        c = message.get("content")
+        if isinstance(c, str) and c.strip():
+            return c.strip()
+        return ""
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, max=8))
     async def _call_deepseek(self, payload: dict) -> dict:
         client = await self._get_client()
@@ -88,13 +150,16 @@ class ModelGateway:
                 "model": self.settings.DEEPSEEK_MODEL_PRO,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
+                "max_tokens": max(512, int(self.settings.DEEPSEEK_MAX_OUTPUT_TOKENS)),
                 "response_format": {"type": "json_object"},
             },
         )
         resp.raise_for_status()
         try:
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            content = self._deepseek_assistant_content_text(
+                data["choices"][0].get("message") or {},
+            )
         except (json.JSONDecodeError, KeyError, IndexError, ValueError) as e:
             # 上游返回非预期结构：记录并抛出，让 text() 走模板兜底
             preview = (resp.text or "")[:200]
@@ -139,21 +204,32 @@ class ModelGateway:
         if not self.settings.has_siliconflow:
             return None
         t0 = time.monotonic()
+        prompt = str(payload.get("prompt") or "").strip()
+        img_body = self._siliconflow_image_payload(prompt)
+        deadline = float(self.settings.IMAGE_GENERATION_TIMEOUT or 180.0)
         try:
             client = await self._get_client()
             resp = await client.post(
                 f"{self.settings.SILICONFLOW_API_BASE}/images/generations",
                 headers={"Authorization": f"Bearer {self.settings.SILICONFLOW_API_KEY}"},
-                json={
-                    "model": self.settings.IMAGE_MODEL,
-                    "prompt": payload.get("prompt", "warning poster"),
-                    "n": 1, "size": "1024x1024",
-                },
+                json=img_body,
+                timeout=max(60.0, deadline),
             )
             resp.raise_for_status()
-            url = resp.json()["data"][0].get("url")
-            logger.info("model_call", capability=capability_id, status="ok",
-                         latency_ms=int((time.monotonic() - t0) * 1000))
+            url = self._image_response_url(resp.json())
+            if not url:
+                logger.warning(
+                    "model_call_bad_image_payload",
+                    capability=capability_id,
+                    preview=(resp.text or "")[:240],
+                )
+                return None
+            logger.info(
+                "model_call",
+                capability=capability_id,
+                status="ok",
+                latency_ms=int((time.monotonic() - t0) * 1000),
+            )
             return url
         except Exception as e:
             logger.warning("model_call_failed", capability=capability_id, error=str(e))
@@ -179,6 +255,7 @@ class ModelGateway:
                         "speed": payload.get("speed", 1.0),
                     },
                 },
+                timeout=max(30.0, float(self.settings.TTS_TIMEOUT)),
             )
             resp.raise_for_status()
             data = resp.json()
@@ -194,3 +271,58 @@ class ModelGateway:
 
     async def music(self, capability_id: str, payload: dict) -> None:
         return None
+
+    async def vision(self, capability_id: str, payload: dict) -> str | None:
+        """图像理解 — 用 Anthropic 视觉接口分析一张图片。
+
+        payload:
+            image_path: str    本地文件路径（必填）
+            instruction: str   想问的问题/分析视角（必填）
+            max_tokens: int    输出上限（默认 1024）
+
+        返回模型生成的中文分析文本；无 key 或失败返回 None。
+        失败由 caller 决定是否走 fallback（如 PIL 描色 / OCR placeholder）。
+        """
+        if not self.settings.has_anthropic:
+            return None
+        image_path = payload.get("image_path", "")
+        instruction = payload.get("instruction", "请分析这张图片，给出 3-5 条具体观察。")
+        max_tokens = int(payload.get("max_tokens", 1024))
+
+        try:
+            import os
+            import mimetypes
+            if not image_path or not os.path.isfile(image_path):
+                logger.warning("vision_image_missing", path=image_path)
+                return None
+            mime, _ = mimetypes.guess_type(image_path)
+            if not mime or not mime.startswith("image/"):
+                logger.warning("vision_not_an_image", path=image_path, mime=mime)
+                return None
+            with open(image_path, "rb") as f:
+                raw = f.read()
+            b64 = base64.b64encode(raw).decode("ascii")
+
+            import anthropic  # noqa: WPS433
+            client = anthropic.AsyncAnthropic(api_key=self.settings.ANTHROPIC_API_KEY)
+            t0 = time.monotonic()
+            resp = await client.messages.create(
+                model=self.settings.anthropic_model_capability_text,
+                max_tokens=max_tokens,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image",
+                         "source": {"type": "base64", "media_type": mime, "data": b64}},
+                        {"type": "text", "text": instruction},
+                    ],
+                }],
+            )
+            text = resp.content[0].text if resp.content else ""
+            logger.info("model_call", capability=capability_id, status="ok",
+                        latency_ms=int((time.monotonic() - t0) * 1000))
+            return text or None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("vision_call_failed",
+                           capability=capability_id, error=str(e))
+            return None

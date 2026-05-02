@@ -15,25 +15,43 @@ class Settings(BaseSettings):
     # True 时跳过 API Key 校验，所有模型调用走工程 fallback
     DEMO_MODE: bool = True
 
-    # ---- Anthropic（主编排模型）----
+    # ---- Anthropic（旗舰文本 + 推理；各「角色」留空表示与 ANTHROPIC_MODEL 相同）----
     ANTHROPIC_API_KEY: str | None = None
     ANTHROPIC_MODEL: str = "claude-opus-4-7"
+    # 主编排：意图 parse / clarify / skill 语义重排 / 分发器 LLM 选路
+    ANTHROPIC_MODEL_CONDUCTOR: str = ""
+    # V1 T 能力：ReAct + tool_use
+    ANTHROPIC_MODEL_CAPABILITY_TEXT: str = ""
+    # V0 九大角色单聊 stream
+    ANTHROPIC_MODEL_ROLE_CHAT: str = ""
 
-    # ---- DeepSeek（中文文本生成）----
+    ANTHROPIC_MAX_OUTPUT_TOKENS_CAPABILITY_TEXT: int = 8192
+    ANTHROPIC_MAX_OUTPUT_TOKENS_ROLE_CHAT: int = 4096
+
+    # ---- DeepSeek（LangGraph/script 网关等 OpenAI-compat 路由）----
     DEEPSEEK_API_KEY: str | None = None
     DEEPSEEK_API_BASE: str = "https://api.deepseek.com/v1"
-    DEEPSEEK_MODEL_PRO: str = "deepseek-chat"
+    DEEPSEEK_MODEL_PRO: str = "deepseek-reasoner"
     DEEPSEEK_MODEL_FLASH: str = "deepseek-chat"
+    # 反诈脚本等长 JSON：`reasoning` 会占 completion，需留出正式输出篇幅
+    DEEPSEEK_MAX_OUTPUT_TOKENS: int = 8192
 
     # ---- SiliconFlow（图片生成）----
     SILICONFLOW_API_KEY: str | None = None
     SILICONFLOW_API_BASE: str = "https://api.siliconflow.cn/v1"
-    IMAGE_MODEL: str = "black-forest-labs/FLUX.1-schnell"
+    # 默认走 FLUX.2-pro（画质优先）；降费可改 FLUX.1-schnell 并同步调整 IMAGE_SIZE
+    IMAGE_MODEL: str = "black-forest-labs/FLUX.2-pro"
+    # SiliconFlow `/images/generations` 使用 image_size（非 OpenAI 的 size）。
+    # FLUX.2 仅支持枚举：512x512、768x1024、1024x768、576x1024、1024x576
+    IMAGE_SIZE: str = "768x1024"
+    # FLUX.1-dev（1–30）/ FLUX.2-flex（1–50）可读取；其余模型忽略
+    IMAGE_INFERENCE_STEPS: int = 28
+    IMAGE_GENERATION_TIMEOUT: float = 180.0
 
     # ---- MiniMax（TTS 语音合成）----
     MINIMAX_API_KEY: str | None = None
     MINIMAX_GROUP_ID: str | None = None
-    MINIMAX_TTS_MODEL: str = "speech-01-turbo"
+    MINIMAX_TTS_MODEL: str = "speech-2.8-hd"
     MINIMAX_VOICE_ID: str = "male-qn-jingying"
 
     # ---- 路径与日志 ----
@@ -51,7 +69,24 @@ class Settings(BaseSettings):
     IMAGE_DOWNLOAD_TIMEOUT: int = 10   # 图片下载超时（秒）
     IMAGE_MAX_SIZE_MB: int = 10        # 单张图片大小上限
     FFMPEG_TIMEOUT: int = 120          # FFmpeg 合成超时（秒）
-    TTS_TIMEOUT: int = 30              # TTS 请求超时（秒）
+    TTS_TIMEOUT: int = 90              # HD TTS 可能较慢，放宽默认超时
+
+    # ---- 模型别名（留空则用 ANTHROPIC_MODEL）----
+
+    @property
+    def anthropic_model_conductor(self) -> str:
+        m = self.ANTHROPIC_MODEL_CONDUCTOR.strip()
+        return m if m else self.ANTHROPIC_MODEL
+
+    @property
+    def anthropic_model_capability_text(self) -> str:
+        m = self.ANTHROPIC_MODEL_CAPABILITY_TEXT.strip()
+        return m if m else self.ANTHROPIC_MODEL
+
+    @property
+    def anthropic_model_role_chat(self) -> str:
+        m = self.ANTHROPIC_MODEL_ROLE_CHAT.strip()
+        return m if m else self.ANTHROPIC_MODEL
 
     # ---- 便捷属性：判断各 API Key 是否真实可用 ----
 

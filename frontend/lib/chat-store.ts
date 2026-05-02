@@ -14,6 +14,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type { RoleId } from './types';
 import type { ArtifactManifest } from './api';
+import { USE_REAL_AGENT_BACKEND, getAgentApiBase } from './agent-server-base';
 
 /**
  * 对应 thinking-states.tsx 的 ThinkingState 7 值 + 'streaming' + 'done' + 'error'。
@@ -184,10 +185,9 @@ export function groupSessionId(groupId: string): SessionKey {
 /** 清空后端对应 session 的历史。前端 store 由调用方自行 clear()。
  *  Mock 模式（无后端 URL）下直接 no-op；前端 clear() 已经满足展示需求。 */
 export async function clearServerHistory(sessionId: string): Promise<void> {
-  const API_BASE = process.env.NEXT_PUBLIC_AGENT_SERVER_URL;
-  if (!API_BASE) return;
+  if (!USE_REAL_AGENT_BACKEND) return;
   try {
-    await fetch(`${API_BASE}/history/${encodeURIComponent(sessionId)}`, {
+    await fetch(`${getAgentApiBase()}/history/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
     });
   } catch {

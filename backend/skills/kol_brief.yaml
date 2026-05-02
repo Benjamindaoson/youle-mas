@@ -1,0 +1,48 @@
+# KOL brief skill — T 单步,生成给 KOL 的合作 brief
+id: kol_brief
+name: KOL 合作 brief
+version: "1.0"
+description: |
+  生成给 KOL/达人的合作 brief 文档:产品介绍、内容方向、关键信息点、避坑提示、合规要点。
+  适合品牌方在派样/付费合作前发给红人作为创作引导。
+deliverable_type: text
+
+intent_keywords:
+  - kol
+  - 达人
+  - 红人
+  - brief
+  - 合作 brief
+  - 派样
+
+negative_keywords:
+  - 标题
+  - 主图
+  - 视频脚本
+
+required_slots:
+  - subject
+
+expected_cost_usd: 0.02
+
+steps:
+  - agent: T
+    task: 撰写 KOL 合作 brief
+    prompt_template: |
+      为以下品牌/产品撰写一份给 KOL 的合作 brief:
+
+      品牌/产品: {subject}
+      行业: {vertical}
+      用户原话: {raw}
+
+      结构(markdown):
+      ## 产品速览(3 条卖点 + 适用人群)
+      ## 内容方向(2-3 个推荐角度,不要"种草" "亲测好用"这种空话)
+      ## 必提关键信息(品牌名 / 价格 / 链接 / 截止时间 / 优惠码)
+      ## 风格建议(语气 / 长度 / 视觉调性)
+      ## 避坑提示(3 条具体警告,如"不要提竞品名 X / Y")
+      ## 合规要点(标#广告 / 不夸大功效 / 不引用未授权图)
+
+      字数控制 600-900。
+    outputs:
+      - text-asset (kol-brief)
