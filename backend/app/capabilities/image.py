@@ -133,6 +133,16 @@ def _should_use_react(task: SkillStep, upstream: list[Any]) -> bool:
     return False
 
 
+def _is_vision_task(task: SkillStep) -> bool:
+    """纯关键词分类器：task.task / outputs 含理解类词 → True。
+
+    向后兼容 PR #9 的测试（test_v1_phase5_vision_skills_onepass.py）；
+    实际路由在 run() 里走 _should_use_react（额外要求 upstream 有图）。
+    """
+    blob = (task.task or "") + " " + " ".join(task.outputs or [])
+    blob = blob.lower()
+    return any(kw in blob for kw in _REACT_KEYWORDS)
+
 
 async def run(
     task: SkillStep,
