@@ -36,9 +36,9 @@ cases:
 
   - id: skill_005
     kind: skill_match
-    description: '"详情页文案" 含"文案"否决词，不应误命中电商主图 skill'
+    description: '"详情页文案" 应命中专门的 product_detail_copy skill；同时 ecommerce_main_image 因否决词跳过'
     input: "电商详情页文案要怎么写"
-    expect_skill_id: null
+    expect_skill_id: product_detail_copy
 
   - id: skill_006
     kind: skill_match
